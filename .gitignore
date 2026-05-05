@@ -1,0 +1,9 @@
+.build/
+.swiftpm/
+dist/
+node_modules/
+.idea/
+Resources/WebUI/.vite/
+DerivedData/
+*.xcuserstate
+.DS_Store

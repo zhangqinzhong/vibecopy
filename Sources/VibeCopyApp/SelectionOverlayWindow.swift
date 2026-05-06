@@ -1,4 +1,5 @@
 import AppKit
+import ScreenCaptureKit
 
 final class SelectionOverlayWindow: NSWindow {
     private let overlayView: SelectionOverlayView
@@ -76,8 +77,11 @@ private final class SelectionOverlayView: NSView {
         }
 
         window?.orderOut(nil)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
-            let image = self.capture(rect)
+        let captureRect = rect
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            try? await Task.sleep(for: .milliseconds(80))
+            let image = await self.capture(captureRect)
             self.window?.close()
             self.completion(image)
         }
@@ -100,20 +104,24 @@ private final class SelectionOverlayView: NSView {
         )
     }
 
-    private func capture(_ rectInView: NSRect) -> NSImage? {
-        let scale = targetScreen.backingScaleFactor
+    private func capture(_ rectInView: NSRect) async -> NSImage? {
         let screenFrame = targetScreen.frame
         let rectInScreen = convert(rectInView, to: nil).offsetBy(dx: screenFrame.minX, dy: screenFrame.minY)
+        // SCScreenshotManager works in global (Quartz) coordinates
         let captureRect = CGRect(
-            x: (rectInScreen.minX - screenFrame.minX) * scale,
-            y: (screenFrame.height - rectInScreen.maxY + screenFrame.minY) * scale,
-            width: rectInScreen.width * scale,
-            height: rectInScreen.height * scale
-        ).integral
-
-        guard let cgImage = CGDisplayCreateImage(CGMainDisplayID(), rect: captureRect) else {
-            return nil
+            x: rectInScreen.minX,
+            y: NSScreen.screens[0].frame.maxY - rectInScreen.maxY,
+            width: rectInScreen.width,
+            height: rectInScreen.height
+        )
+        return await withCheckedContinuation { continuation in
+            SCScreenshotManager.captureImage(in: captureRect) { cgImage, _ in
+                if let cgImage {
+                    continuation.resume(returning: NSImage(cgImage: cgImage, size: rectInView.size))
+                } else {
+                    continuation.resume(returning: nil)
+                }
+            }
         }
-        return NSImage(cgImage: cgImage, size: rectInView.size)
     }
 }

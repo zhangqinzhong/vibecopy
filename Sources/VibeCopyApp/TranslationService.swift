@@ -1,23 +1,18 @@
-import Foundation
+import AppKit
+import SwiftUI
+import Translation
 
 struct TranslationResult {
     let sourceText: String
     let translatedText: String
 }
 
-final class TranslationService {
-    private let shortcutName: String
-    private let timeout: TimeInterval
-
-        self.shortcutName = shortcutName
-        self.timeout = timeout
-    }
-
+final class TranslationService: @unchecked Sendable {
     func translate(
         _ text: String,
         sourceLanguage: String? = nil,
         targetLanguage: String? = nil,
-        completion: @escaping (TranslationResult) -> Void
+        completion: @escaping @Sendable (TranslationResult) -> Void
     ) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
@@ -25,102 +20,48 @@ final class TranslationService {
             return
         }
 
-        runShortcut(input: trimmed, sourceLanguage: sourceLanguage, targetLanguage: targetLanguage) { [shortcutName] result in
-            switch result {
-            case .success(let translatedText):
-                completion(TranslationResult(sourceText: trimmed, translatedText: translatedText))
-            case .failure(let error):
+        let detectedSource = Self.containsChinese(trimmed) ? "zh-Hans" : "en-US"
+        let sourceLang = Locale.Language(identifier: sourceLanguage.map(Self.toLocaleIdentifier) ?? detectedSource)
+        let targetLang = Locale.Language(identifier: targetLanguage.map(Self.toLocaleIdentifier) ?? (detectedSource == "zh-Hans" ? "en-US" : "zh-Hans"))
+
+        Task { @MainActor in
+            let availability = LanguageAvailability()
+            let status = await availability.status(from: sourceLang, to: targetLang)
+
+            if status == .unsupported {
+                completion(TranslationResult(sourceText: trimmed, translatedText: "不支持该语言对的翻译。"))
+                return
+            }
+
+            if status == .supported {
+                // Language pack not installed — use SwiftUI .translationTask to trigger system download UI
+                await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                    TranslationDownloadPresenter.present(source: sourceLang, target: targetLang) {
+                        continuation.resume()
+                    }
+                }
+            }
+
+            do {
+                let session = TranslationSession(installedSource: sourceLang, target: targetLang)
+                let response = try await session.translate(trimmed)
+                completion(TranslationResult(sourceText: trimmed, translatedText: response.targetText))
+            } catch {
                 completion(TranslationResult(
                     sourceText: trimmed,
-                    translatedText: """
-                    调用快捷指令失败：\(error.localizedDescription)
-
-                    请确认快捷指令 App 中存在 “\(shortcutName)”，并且它可以接收文本输入、返回翻译文本。
-                    """
+                    translatedText: "翻译失败：\(error.localizedDescription)"
                 ))
             }
         }
     }
 
-    private func runShortcut(
-        input: String,
-        sourceLanguage: String?,
-        targetLanguage: String?,
-        completion: @escaping (Result<String, Error>) -> Void
-    ) {
-        let shortcutInput: String
-        do {
-            let detectedSourceLanguage = Self.containsChinese(input) ? "zh_CN" : "en_US"
-            let resolvedSourceLanguage = sourceLanguage ?? detectedSourceLanguage
-            let resolvedTargetLanguage = targetLanguage ?? (resolvedSourceLanguage == "zh_CN" ? "en_US" : "zh_CN")
-            let payload = [
-                "text": input,
-                "detectFrom": resolvedSourceLanguage,
-                "detectTo": resolvedTargetLanguage
-            ] as [String: String]
-            let data = try JSONSerialization.data(withJSONObject: payload)
-            shortcutInput = String(data: data, encoding: .utf8) ?? input
-        } catch {
-            shortcutInput = input
-        }
-
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        process.arguments = [
-            "-e",
-            """
-            on run argv
-                set shortcutName to item 1 of argv
-                set inputString to item 2 of argv
-                tell application "Shortcuts Events"
-                    run the shortcut named shortcutName with input inputString
-                end tell
-            end run
-            """,
-            shortcutName,
-            shortcutInput
-        ]
-
-        let stdout = Pipe()
-        let stderr = Pipe()
-        process.standardOutput = stdout
-        process.standardError = stderr
-
-        do {
-            try process.run()
-        } catch {
-            completion(.failure(error))
-            return
-        }
-
-        let deadline = Date().addingTimeInterval(timeout)
-        DispatchQueue.global(qos: .userInitiated).async {
-            while process.isRunning && Date() < deadline {
-                Thread.sleep(forTimeInterval: 0.05)
-            }
-
-            if process.isRunning {
-                process.terminate()
-                completion(.failure(ShortcutTranslationError.timedOut(self.timeout)))
-                return
-            }
-
-            let output = String(data: stdout.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
-                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            let errorOutput = String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
-                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-
-            guard process.terminationStatus == 0 else {
-                completion(.failure(ShortcutTranslationError.failed(errorOutput)))
-                return
-            }
-
-            guard !output.isEmpty else {
-                completion(.failure(ShortcutTranslationError.emptyOutput))
-                return
-            }
-
-            completion(.success(output))
+    private static func toLocaleIdentifier(_ code: String) -> String {
+        switch code {
+        case "zh_CN": return "zh-Hans"
+        case "zh_TW": return "zh-Hant"
+        case "en_US": return "en-US"
+        case "ja_JP": return "ja-JP"
+        default: return code.replacingOccurrences(of: "_", with: "-")
         }
     }
 
@@ -132,19 +73,43 @@ final class TranslationService {
     }
 }
 
-private enum ShortcutTranslationError: LocalizedError {
-    case timedOut(TimeInterval)
-    case failed(String)
-    case emptyOutput
+// Hosts a hidden SwiftUI view to drive .translationTask download UI
+@MainActor
+private final class TranslationDownloadPresenter {
+    static func present(
+        source: Locale.Language,
+        target: Locale.Language,
+        completion: @escaping @MainActor () -> Void
+    ) {
+        let config = TranslationSession.Configuration(source: source, target: target)
+        let view = TranslationDownloadView(config: config, completion: completion)
+        let hosting = NSHostingController(rootView: view)
+        hosting.view.frame = NSRect(x: 0, y: 0, width: 1, height: 1)
 
-    var errorDescription: String? {
-        switch self {
-        case .timedOut(let timeout):
-            return "快捷指令超过 \(Int(timeout)) 秒未返回。"
-        case .failed(let message):
-            return message.isEmpty ? "快捷指令执行失败。" : message
-        case .emptyOutput:
-            return "快捷指令没有返回任何文本。"
-        }
+        let window = NSWindow(contentViewController: hosting)
+        window.setFrame(NSRect(x: -10, y: -10, width: 1, height: 1), display: false)
+        window.level = .screenSaver
+        window.center()
+        window.orderFrontRegardless()
+        // Keep window alive in an associated object until completion fires
+        objc_setAssociatedObject(hosting, &TranslationDownloadPresenter.windowKey, window, .OBJC_ASSOCIATION_RETAIN)
+    }
+
+    private static var windowKey = 0
+}
+
+private struct TranslationDownloadView: View {
+    let config: TranslationSession.Configuration
+    let completion: @MainActor () -> Void
+    @State private var trigger = false
+
+    var body: some View {
+        Color.clear
+            .frame(width: 1, height: 1)
+            .onAppear { trigger = true }
+            .translationTask(config) { session in
+                try? await session.prepareTranslation()
+                await completion()
+            }
     }
 }

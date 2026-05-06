@@ -5,7 +5,7 @@ import PackageDescription
 let package = Package(
     name: "VibeCopy",
     platforms: [
-        .macOS(.v13)
+        .macOS("26.0")
     ],
     products: [
         .executable(name: "VibeCopy", targets: ["VibeCopyApp"])
@@ -18,7 +18,9 @@ let package = Package(
                 .linkedFramework("AppKit"),
                 .linkedFramework("Carbon"),
                 .linkedFramework("Vision"),
-                .linkedFramework("SwiftUI")
+                .linkedFramework("SwiftUI"),
+                .linkedFramework("Translation"),
+                .linkedFramework("ScreenCaptureKit")
             ]
         )
     ],

@@ -13,6 +13,8 @@ final class SettingsWindowController: NSWindowController {
             defer: false
         )
         window.title = "VibeCopy 设置"
+        window.titleVisibility = .visible
+        window.titlebarAppearsTransparent = false
         window.contentViewController = hosting
         window.center()
         super.init(window: window)
@@ -63,12 +65,13 @@ private struct SettingsView: View {
                 }
             }
             .listStyle(.sidebar)
-            .navigationSplitViewColumnWidth(min: 160, ideal: 180, max: 220)
+            .navigationSplitViewColumnWidth(min: 170, ideal: 190, max: 220)
         } detail: {
             detailView
         }
         .frame(minWidth: 700, minHeight: 500)
         .preferredColorScheme(settings.preferredColorScheme)
+        .toolbar(removing: .sidebarToggle)
         .onAppear {
             settings.refreshSupportedLanguages()
         }
@@ -175,8 +178,29 @@ private struct LanguageSettingsPane: View {
     @ObservedObject var settings: AppSettingsModel
 
     var body: some View {
-        Form {
-            Section("系统 Translation 语言") {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                languageToolbar
+                languageList
+            }
+            .padding(.horizontal, 28)
+            .padding(.top, 18)
+            .padding(.bottom, 28)
+        }
+        .navigationTitle("语言")
+        .task {
+            if settings.languageStatuses.isEmpty {
+                settings.refreshSupportedLanguages()
+            }
+        }
+    }
+
+    private var languageToolbar: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("系统 Translation 语言")
+                .font(.headline)
+
+            VStack(spacing: 14) {
                 HStack {
                     Text(settings.languageStatusMessage)
                         .foregroundStyle(.secondary)
@@ -187,42 +211,78 @@ private struct LanguageSettingsPane: View {
                     .disabled(settings.isRefreshingLanguages)
                 }
 
-                Button(settings.isPreparingLanguagePack ? "准备中..." : "下载当前语言方向的语言包") {
-                    settings.prepareSelectedLanguagePack()
-                }
-                .disabled(settings.isPreparingLanguagePack)
-            }
+                Divider()
 
-            Section("支持语言") {
-                ForEach(settings.languageStatuses) { row in
-                    HStack(spacing: 12) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(row.language.displayName)
-                            Text(row.language.id)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        VStack(alignment: .trailing, spacing: 2) {
-                            Text(row.state)
-                                .font(.subheadline.weight(.semibold))
-                            Text(row.detail)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
+                HStack {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("当前方向")
+                            .font(.subheadline.weight(.semibold))
+                        Text("\(settings.languageLabel(for: settings.sourceLanguageCode)) -> \(settings.languageLabel(for: settings.targetLanguageCode))")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
-                    .padding(.vertical, 4)
+                    Spacer()
+                    Button(settings.isPreparingLanguagePack ? "准备中..." : "下载当前方向") {
+                        settings.prepareSelectedLanguagePack()
+                    }
+                    .disabled(settings.isPreparingLanguagePack)
                 }
             }
-        }
-        .formStyle(.grouped)
-        .navigationTitle("语言")
-        .task {
-            if settings.languageStatuses.isEmpty {
-                settings.refreshSupportedLanguages()
-            }
+            .padding(14)
+            .background(Color.primary.opacity(0.055), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         }
     }
+
+    private var languageList: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("支持语言")
+                .font(.headline)
+
+            LazyVStack(spacing: 0) {
+                ForEach(settings.languageStatuses) { row in
+                    languageRow(row)
+                    if row.id != settings.languageStatuses.last?.id {
+                        Divider()
+                    }
+                }
+            }
+            .padding(.horizontal, 14)
+            .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        }
+    }
+
+    private func languageRow(_ row: TranslationLanguageStatus) -> some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(row.language.displayName)
+                    .font(.system(size: 14, weight: .semibold))
+                Text(row.language.id)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            VStack(alignment: .trailing, spacing: 3) {
+                Text(row.state)
+                    .font(.subheadline.weight(.semibold))
+                Text(row.detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if row.canDownload {
+                Button(settings.isPreparingLanguagePack ? "..." : "下载") {
+                    settings.prepareLanguagePack(for: row.language)
+                }
+                .disabled(settings.isPreparingLanguagePack)
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+            }
+        }
+        .padding(.vertical, 11)
+    }
+
 }
 
 private struct AboutSettingsPane: View {

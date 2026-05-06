@@ -43,6 +43,7 @@ struct TranslationLanguageStatus: Identifiable {
     let language: TranslationLanguageOption
     var state: String
     var detail: String
+    var canDownload: Bool
 }
 
 @MainActor
@@ -119,7 +120,8 @@ final class AppSettingsModel: ObservableObject {
                     id: option.id,
                     language: option,
                     state: "当前目标",
-                    detail: "不能翻译到同一种语言"
+                    detail: "不能翻译到同一种语言",
+                    canDownload: false
                 ))
                 continue
             }
@@ -129,7 +131,8 @@ final class AppSettingsModel: ObservableObject {
                 id: option.id,
                 language: option,
                 state: label(for: status),
-                detail: detail(for: status)
+                detail: detail(for: status),
+                canDownload: status == .supported
             ))
         }
 
@@ -160,6 +163,10 @@ final class AppSettingsModel: ObservableObject {
 
     func prepareSelectedLanguagePack() {
         prepareLanguagePack(source: sourceLanguageCode, target: targetLanguageCode)
+    }
+
+    func prepareLanguagePack(for option: TranslationLanguageOption) {
+        prepareLanguagePack(source: option.id, target: targetLanguageCode)
     }
 
     func prepareLanguagePack(source: String, target: String) {

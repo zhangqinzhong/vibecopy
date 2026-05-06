@@ -6,8 +6,11 @@ It is not a release changelog. It records product direction, visual references, 
 
 ## Files
 
-- `0000-timeline.md` - the initial project timeline, starting from the current floating translation island redesign.
+- `0000-timeline.md` - the changelog index.
+- `YYYY-MM-DD.md` - dated changelog entries. Add new entries to the date file for that day, and create a new date file when the date changes.
 - `assets/` - local copies of referenced conversation images and generated design previews.
+
+Do not keep appending all history to one large file. Keep date-specific entries in date-specific files so reviews stay small and readable.
 
 ## Image Policy
 

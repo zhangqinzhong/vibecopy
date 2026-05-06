@@ -288,3 +288,15 @@ The previous flash fix removed the visible island morph by opening directly into
 ### Related Cleanup
 
 - Released the hidden Translation framework language-pack window after `.translationTask` finishes preparing translation, avoiding a retained 1x1 high-level window.
+
+## 2026-05-06 - Hover-Open Closed Island Entrance
+
+The translation island now behaves more like Open Island when dismissed: it collapses into a small notch-aligned entrance instead of disappearing completely.
+
+### Implemented
+
+- Kept the AppKit panel alive at the full opened size while SwiftUI renders a closed surface aligned to the physical notch.
+- Derived the closed island width and height from `NSScreen.safeAreaInsets` and auxiliary top areas so notched MacBook displays align with the real notch; external displays use a stable simulated notch size.
+- Added local and global mouse monitoring so hovering over the closed entrance reopens the island after a short delay.
+- Changed collapse behavior from click-outside-only to pointer-leave: once opened, moving the mouse outside the island frame automatically collapses it back to the notch entrance.
+- Kept the closed transparent window from intercepting desktop clicks by ignoring mouse events while collapsed.

@@ -3,6 +3,9 @@ import SwiftUI
 
 final class SelectionTranslationWindowController: NSWindowController {
     private static let islandSize = NSSize(width: 600, height: 360)
+    private static let externalClosedIslandSize = NSSize(width: 246, height: 28)
+    private static let notchedClosedSideExpansion: CGFloat = 56
+    private static let hoverOpenDelay: TimeInterval = 0.12
 
     private let translationService: TranslationService
     private let islandModel = TranslationIslandModel()
@@ -14,6 +17,8 @@ final class SelectionTranslationWindowController: NSWindowController {
     private var manualTranslationGeneration = 0
     private var isPinned = false
     private var localEventMonitor: Any?
+    private var globalMouseMonitor: Any?
+    private var hoverOpenWorkItem: DispatchWorkItem?
     private var transitionGeneration = 0
     private var scheduledTranslation: DispatchWorkItem?
 
@@ -41,6 +46,7 @@ final class SelectionTranslationWindowController: NSWindowController {
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle, .stationary]
         window.hidesOnDeactivate = false
         window.ignoresMouseEvents = false
+        window.acceptsMouseMovedEvents = true
 
         super.init(window: window)
 
@@ -54,7 +60,7 @@ final class SelectionTranslationWindowController: NSWindowController {
 
     deinit {
         scheduledTranslation?.cancel()
-        stopDismissMonitoring()
+        stopInteractionMonitoring()
     }
 
     func showLoading(sourceText: String) {
@@ -105,13 +111,15 @@ final class SelectionTranslationWindowController: NSWindowController {
         guard let window, window.isVisible else { return }
         transitionGeneration &+= 1
         let generation = transitionGeneration
-        stopDismissMonitoring()
+        hoverOpenWorkItem?.cancel()
+        hoverOpenWorkItem = nil
+        islandModel.closedSize = Self.closedIslandSize(for: Self.targetScreen())
         window.ignoresMouseEvents = true
         islandModel.phase = .closed
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self, weak window] in
             guard let self, let window, self.transitionGeneration == generation else { return }
-            window.orderOut(nil)
+            window.orderFrontRegardless()
         }
     }
 
@@ -143,9 +151,10 @@ final class SelectionTranslationWindowController: NSWindowController {
             dismiss: { [weak self] in self?.dismissIsland() }
         )
 
-        let hostingView = NSHostingView(
+        let hostingView = TranslationIslandHostingView(
             rootView: TranslationIslandView(model: islandModel, actions: actions)
         )
+        hostingView.controller = self
         hostingView.translatesAutoresizingMaskIntoConstraints = false
         hostingView.wantsLayer = true
         hostingView.layer?.backgroundColor = NSColor.clear.cgColor
@@ -272,17 +281,21 @@ final class SelectionTranslationWindowController: NSWindowController {
         guard let window else { return }
         let finalFrame = islandFrame()
         let isFirstOpen = !window.isVisible
+        let shouldAnimateOpen = isFirstOpen || islandModel.phase == .closed
         transitionGeneration &+= 1
         let generation = transitionGeneration
+        islandModel.closedSize = Self.closedIslandSize(for: Self.targetScreen())
         window.setFrame(finalFrame, display: false)
         window.ignoresMouseEvents = false
 
-        if isFirstOpen {
-            islandModel.phase = .closed
+        if shouldAnimateOpen {
+            if isFirstOpen {
+                islandModel.phase = .closed
+            }
             window.alphaValue = 1
             window.orderFrontRegardless()
             window.makeKey()
-            startDismissMonitoring()
+            startInteractionMonitoring()
 
             DispatchQueue.main.async { [weak self] in
                 guard let self, self.transitionGeneration == generation else { return }
@@ -298,7 +311,7 @@ final class SelectionTranslationWindowController: NSWindowController {
             }
             window.orderFrontRegardless()
             window.makeKey()
-            startDismissMonitoring()
+            startInteractionMonitoring()
         }
     }
 
@@ -321,27 +334,135 @@ final class SelectionTranslationWindowController: NSWindowController {
         )
     }
 
-    private func startDismissMonitoring() {
-        guard localEventMonitor == nil else { return }
+    private func startInteractionMonitoring() {
+        if localEventMonitor == nil {
+            localEventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .mouseMoved, .leftMouseDown]) { [weak self] event in
+                guard let self else { return event }
 
-        localEventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { [weak self] event in
-            if event.type == .keyDown && event.keyCode == 53 {
-                self?.dismissIsland()
-                return nil
+                if event.type == .keyDown && event.keyCode == 53 {
+                    self.dismissIsland()
+                    return nil
+                }
+
+                if event.type == .mouseMoved {
+                    self.handleMouseMoved(at: NSEvent.mouseLocation)
+                } else if event.type == .leftMouseDown {
+                    self.handleMouseDown(at: NSEvent.mouseLocation)
+                }
+
+                return event
             }
-            return event
+        }
+
+        if globalMouseMonitor == nil {
+            globalMouseMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.mouseMoved, .leftMouseDown]) { [weak self] event in
+                guard let self else { return }
+                if event.type == .mouseMoved {
+                    self.handleMouseMoved(at: NSEvent.mouseLocation)
+                } else if event.type == .leftMouseDown {
+                    self.handleMouseDown(at: NSEvent.mouseLocation)
+                }
+            }
         }
     }
 
-    private func stopDismissMonitoring() {
+    private func stopInteractionMonitoring() {
+        hoverOpenWorkItem?.cancel()
+        hoverOpenWorkItem = nil
+
         if let localEventMonitor {
             NSEvent.removeMonitor(localEventMonitor)
             self.localEventMonitor = nil
         }
+
+        if let globalMouseMonitor {
+            NSEvent.removeMonitor(globalMouseMonitor)
+            self.globalMouseMonitor = nil
+        }
+    }
+
+    private func handleMouseMoved(at screenPoint: NSPoint) {
+        guard window?.isVisible == true else { return }
+
+        if islandModel.phase == .closed, closedIslandRect().contains(screenPoint) {
+            scheduleHoverOpen()
+            return
+        }
+
+        if islandModel.phase == .closed {
+            hoverOpenWorkItem?.cancel()
+            hoverOpenWorkItem = nil
+            return
+        }
+
+        if islandModel.phase == .opened, !openedIslandRect().contains(screenPoint) {
+            dismissIsland()
+        }
+    }
+
+    private func handleMouseDown(at screenPoint: NSPoint) {
+        guard window?.isVisible == true else { return }
+
+        if islandModel.phase == .closed {
+            if closedIslandRect().contains(screenPoint) {
+                hoverOpenWorkItem?.cancel()
+                hoverOpenWorkItem = nil
+                presentIsland()
+            }
+            return
+        }
+
+        if islandModel.phase == .opened, !openedIslandRect().contains(screenPoint) {
+            dismissIsland()
+        }
+    }
+
+    private func scheduleHoverOpen() {
+        guard hoverOpenWorkItem == nil else { return }
+
+        let item = DispatchWorkItem { [weak self] in
+            guard let self, self.islandModel.phase == .closed else { return }
+            self.hoverOpenWorkItem = nil
+            self.presentIsland()
+        }
+
+        hoverOpenWorkItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.hoverOpenDelay, execute: item)
+    }
+
+    private func closedIslandRect() -> NSRect {
+        guard let window else { return .zero }
+        let closedSize = islandModel.closedSize
+        return NSRect(
+            x: window.frame.midX - closedSize.width / 2,
+            y: window.frame.maxY - closedSize.height,
+            width: closedSize.width,
+            height: closedSize.height
+        )
+    }
+
+    private func openedIslandRect() -> NSRect {
+        window?.frame ?? .zero
     }
 
     private static func targetScreen() -> NSScreen? {
         NSScreen.screens.first(where: isNotched) ?? NSScreen.main ?? NSScreen.screens.first
+    }
+
+    private static func closedIslandSize(for screen: NSScreen?) -> CGSize {
+        guard let screen else {
+            return externalClosedIslandSize
+        }
+
+        guard isNotched(screen) else {
+            return externalClosedIslandSize
+        }
+
+        let notchSize = screen.notchSize
+        return CGSize(
+            width: notchSize.width + notchedClosedSideExpansion,
+            height: max(24, notchSize.height)
+        )
     }
 
     private static func isNotched(_ screen: NSScreen) -> Bool {
@@ -394,6 +515,23 @@ private final class TranslationIslandPanel: NSPanel {
     override var canBecomeMain: Bool { true }
 }
 
+private final class TranslationIslandHostingView<Content: View>: NSHostingView<Content> {
+    weak var controller: SelectionTranslationWindowController?
+
+    override var isOpaque: Bool {
+        false
+    }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        true
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        window?.makeKey()
+        super.mouseDown(with: event)
+    }
+}
+
 private enum TranslationMode {
     case empty
     case loading
@@ -417,6 +555,7 @@ private final class TranslationIslandModel: ObservableObject {
     @Published var sourceLanguage = "zh_CN"
     @Published var targetLanguage = "en_US"
     @Published var isPinned = false
+    @Published var closedSize = CGSize(width: 246, height: 28)
 }
 
 private struct TranslationIslandActions {
@@ -437,7 +576,6 @@ private struct TranslationIslandView: View {
     let actions: TranslationIslandActions
 
     private let openedSize = CGSize(width: 600, height: 360)
-    private let closedSize = CGSize(width: 246, height: 28)
     private let openedContentHorizontalInset: CGFloat = 24
 
     private var usesOpenedSurface: Bool {
@@ -453,7 +591,7 @@ private struct TranslationIslandView: View {
     }
 
     private var currentSurfaceSize: CGSize {
-        usesOpenedSurface ? openedSize : closedSize
+        usesOpenedSurface ? openedSize : model.closedSize
     }
 
     private var surfaceShape: TranslationIslandShape {
@@ -892,5 +1030,20 @@ private struct DotField: View {
             }
         }
         .allowsHitTesting(false)
+    }
+}
+
+private extension NSScreen {
+    static let translationExternalNotchSize = CGSize(width: 190, height: 38)
+
+    var notchSize: CGSize {
+        guard safeAreaInsets.top > 0 else {
+            return Self.translationExternalNotchSize
+        }
+
+        let leftPadding = auxiliaryTopLeftArea?.width ?? 0
+        let rightPadding = auxiliaryTopRightArea?.width ?? 0
+        let notchWidth = frame.width - leftPadding - rightPadding + 4
+        return CGSize(width: notchWidth, height: safeAreaInsets.top)
     }
 }

@@ -750,21 +750,27 @@ private struct TranslationIslandContent: View {
     }
 
     private var divider: some View {
-        ZStack {
-            Rectangle()
-                .fill(Color.white.opacity(0.72))
-                .frame(height: 1)
-                .overlay(Rectangle().fill(Color.black.opacity(0.07)).frame(height: 0.5), alignment: .bottom)
+        ZStack(alignment: .center) {
+            HStack(spacing: 54) {
+                TranslationDividerLine()
+                TranslationDividerLine()
+            }
+            .padding(.horizontal, 10)
 
             Button(action: actions.swapLanguages) {
                 Image(systemName: "arrow.up.arrow.down")
-                    .font(.system(size: 21, weight: .medium))
+                    .font(.system(size: 21, weight: .semibold))
                     .foregroundStyle(cyan)
-                    .frame(width: 40, height: 40)
+                    .frame(width: 42, height: 42)
                     .background(
                         Circle()
-                            .fill(Color.white.opacity(0.84))
-                            .shadow(color: Color.black.opacity(0.12), radius: 9, x: 0, y: 4)
+                            .fill(Color.white.opacity(0.92))
+                            .shadow(color: Color.black.opacity(0.13), radius: 10, x: 0, y: 5)
+                            .shadow(color: Color.white.opacity(0.85), radius: 5, x: 0, y: -1)
+                    )
+                    .overlay(
+                        Circle()
+                            .stroke(Color.black.opacity(0.055), lineWidth: 0.75)
                     )
             }
             .buttonStyle(.plain)
@@ -889,6 +895,28 @@ private struct TranslationActionButton: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+    }
+}
+
+private struct TranslationDividerLine: View {
+    var body: some View {
+        ZStack(alignment: .center) {
+            Rectangle()
+                .fill(Color.black.opacity(0.15))
+                .frame(height: 1.2)
+
+            Rectangle()
+                .fill(Color.white.opacity(0.55))
+                .frame(height: 0.8)
+                .offset(y: -0.75)
+
+            Rectangle()
+                .fill(Color.black.opacity(0.035))
+                .frame(height: 0.7)
+                .offset(y: 1)
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: 4)
     }
 }
 

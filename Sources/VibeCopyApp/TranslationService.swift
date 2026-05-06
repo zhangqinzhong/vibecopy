@@ -20,6 +20,11 @@ final class TranslationService: @unchecked Sendable {
             return
         }
 
+        guard Self.containsTranslatableText(trimmed) else {
+            completion(TranslationResult(sourceText: trimmed, translatedText: trimmed))
+            return
+        }
+
         let detectedSource = Self.containsChinese(trimmed) ? "zh-Hans" : "en-US"
         let sourceLang = Locale.Language(identifier: sourceLanguage.map(Self.toLocaleIdentifier) ?? detectedSource)
         let targetLang = Locale.Language(identifier: targetLanguage.map(Self.toLocaleIdentifier) ?? (detectedSource == "zh-Hans" ? "en-US" : "zh-Hans"))
@@ -69,6 +74,14 @@ final class TranslationService: @unchecked Sendable {
         text.unicodeScalars.contains { scalar in
             (0x4E00...0x9FFF).contains(Int(scalar.value)) ||
             (0x3400...0x4DBF).contains(Int(scalar.value))
+        }
+    }
+
+    private static func containsTranslatableText(_ text: String) -> Bool {
+        text.unicodeScalars.contains { scalar in
+            CharacterSet.letters.contains(scalar) ||
+                (0x4E00...0x9FFF).contains(Int(scalar.value)) ||
+                (0x3400...0x4DBF).contains(Int(scalar.value))
         }
     }
 }

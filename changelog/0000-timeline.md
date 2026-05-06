@@ -262,3 +262,13 @@ The first reference-light pass was too subtle and still looked like incremental 
 - Rebuilt `text-case.svg` around a clear boxed `Aa` mark instead of the previous cramped letter construction.
 - Simplified `pin.svg` further and removed decorative arrow shaping so it reads as a quiet toolbar symbol.
 - Reduced action icon display size slightly so the thin-line shapes match the reference weight at runtime.
+
+## 2026-05-06 - Fix Translation Island Flash and Close Animation
+
+The floating translation island had two rendering bugs on open: a double-flash caused by the window rendering before SwiftUI had painted, and a white rectangle artifact in the lower-right region caused by an internal NSScrollView background.
+
+### Fixed
+
+- Eliminated the open double-flash by setting `islandModel.phase = .opened` directly (no intermediate `.closed` state) and using `NSAnimationContext` to fade the window in from `alphaValue=0` over 0.2s. The previous approach rendered a pill frame before expanding, which appeared as two visible flashes.
+- Replaced `showWindow(nil)` and `setFrame(display:true)` with `orderFrontRegardless()` and `setFrame(display:false)` to prevent AppKit from compositing the window before SwiftUI has painted its first frame.
+- Added close animation: `phase=.closed` triggers the SwiftUI collapse animation while `NSAnimationContext` fades `alphaValue` to 0 over 0.25s, then calls `orderOut` and resets `alphaValue=1` for the next open.

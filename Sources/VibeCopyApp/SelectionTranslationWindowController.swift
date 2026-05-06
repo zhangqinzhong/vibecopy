@@ -107,9 +107,13 @@ final class SelectionTranslationWindowController: NSWindowController {
         let generation = transitionGeneration
         stopDismissMonitoring()
         islandModel.phase = .closed
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self, weak window] in
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.25
+            window.animator().alphaValue = 0
+        } completionHandler: { [weak self, weak window] in
             guard let self, let window, self.transitionGeneration == generation else { return }
             window.orderOut(nil)
+            window.alphaValue = 1
         }
     }
 
@@ -269,24 +273,28 @@ final class SelectionTranslationWindowController: NSWindowController {
     private func presentIsland() {
         guard let window else { return }
         let finalFrame = islandFrame()
-        let shouldAnimateOpen = !window.isVisible
+        let isFirstOpen = !window.isVisible
         transitionGeneration &+= 1
-        islandModel.phase = shouldAnimateOpen ? .closed : .opened
-        window.setFrame(finalFrame, display: true)
-        showWindow(nil)
-        window.orderFrontRegardless()
-        window.makeKey()
-        if let hostingView {
-            window.makeFirstResponder(hostingView)
-        }
+        window.setFrame(finalFrame, display: false)
 
-        if shouldAnimateOpen {
-            DispatchQueue.main.async { [weak self] in
-                self?.islandModel.phase = .opened
+        if isFirstOpen {
+            // Open: set phase=.opened immediately so there's no pill flash,
+            // then fade the window in with alphaValue animation.
+            islandModel.phase = .opened
+            window.alphaValue = 0
+            window.orderFrontRegardless()
+            window.makeKey()
+            startDismissMonitoring()
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = 0.2
+                window.animator().alphaValue = 1
             }
+        } else {
+            islandModel.phase = .opened
+            window.orderFrontRegardless()
+            window.makeKey()
+            startDismissMonitoring()
         }
-
-        startDismissMonitoring()
     }
 
     private func positionAtIsland() {

@@ -82,7 +82,13 @@ private final class TranslationDownloadPresenter {
         completion: @escaping @MainActor () -> Void
     ) {
         let config = TranslationSession.Configuration(source: source, target: target)
-        let view = TranslationDownloadView(config: config, completion: completion)
+        var retainedWindow: NSWindow?
+        let view = TranslationDownloadView(config: config) {
+            retainedWindow?.orderOut(nil)
+            retainedWindow?.close()
+            retainedWindow = nil
+            completion()
+        }
         let hosting = NSHostingController(rootView: view)
         hosting.view.frame = NSRect(x: 0, y: 0, width: 1, height: 1)
 
@@ -90,26 +96,21 @@ private final class TranslationDownloadPresenter {
         window.setFrame(NSRect(x: -10, y: -10, width: 1, height: 1), display: false)
         window.level = .screenSaver
         window.center()
+        retainedWindow = window
         window.orderFrontRegardless()
-        // Keep window alive in an associated object until completion fires
-        objc_setAssociatedObject(hosting, &TranslationDownloadPresenter.windowKey, window, .OBJC_ASSOCIATION_RETAIN)
     }
-
-    private static var windowKey = 0
 }
 
 private struct TranslationDownloadView: View {
     let config: TranslationSession.Configuration
     let completion: @MainActor () -> Void
-    @State private var trigger = false
 
     var body: some View {
         Color.clear
             .frame(width: 1, height: 1)
-            .onAppear { trigger = true }
             .translationTask(config) { session in
                 try? await session.prepareTranslation()
-                await completion()
+                completion()
             }
     }
 }

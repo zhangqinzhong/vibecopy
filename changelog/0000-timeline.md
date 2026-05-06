@@ -272,3 +272,19 @@ The floating translation island had two rendering bugs on open: a double-flash c
 - Eliminated the open double-flash by setting `islandModel.phase = .opened` directly (no intermediate `.closed` state) and using `NSAnimationContext` to fade the window in from `alphaValue=0` over 0.2s. The previous approach rendered a pill frame before expanding, which appeared as two visible flashes.
 - Replaced `showWindow(nil)` and `setFrame(display:true)` with `orderFrontRegardless()` and `setFrame(display:false)` to prevent AppKit from compositing the window before SwiftUI has painted its first frame.
 - Added close animation: `phase=.closed` triggers the SwiftUI collapse animation while `NSAnimationContext` fades `alphaValue` to 0 over 0.25s, then calls `orderOut` and resets `alphaValue=1` for the next open.
+
+## 2026-05-06 - Restore Island Morph Animation Without Losing Controls
+
+The previous flash fix removed the visible island morph by opening directly into the expanded state. Reintroducing the older closed-to-open transition caused the original bug to return: the window flashed twice and the center swap button plus right-side toolbar controls disappeared after expansion.
+
+### Fixed
+
+- Followed the stable Open Island pattern: keep the AppKit window at the full opened size and avoid AppKit window animations during the island morph.
+- Replaced the two-state open path with `closed -> opening -> opened` so the surface can morph first and the interactive content can fade in after the shell has expanded.
+- Split surface expansion from content visibility. The shell now uses the opened geometry during `.opening`, while buttons and panes remain hidden until `.opened`, preventing controls from being laid out or clipped inside the closed pill.
+- Kept `setFrame(display:false)` and `orderFrontRegardless()` so AppKit does not paint an early intermediate frame.
+- During close, the SwiftUI surface collapses before the window is ordered out, and mouse events are ignored while the closing transition finishes.
+
+### Related Cleanup
+
+- Released the hidden Translation framework language-pack window after `.translationTask` finishes preparing translation, avoiding a retained 1x1 high-level window.

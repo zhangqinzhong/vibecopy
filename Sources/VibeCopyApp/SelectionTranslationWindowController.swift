@@ -106,14 +106,12 @@ final class SelectionTranslationWindowController: NSWindowController {
         transitionGeneration &+= 1
         let generation = transitionGeneration
         stopDismissMonitoring()
+        window.ignoresMouseEvents = true
         islandModel.phase = .closed
-        NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.25
-            window.animator().alphaValue = 0
-        } completionHandler: { [weak self, weak window] in
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self, weak window] in
             guard let self, let window, self.transitionGeneration == generation else { return }
             window.orderOut(nil)
-            window.alphaValue = 1
         }
     }
 
@@ -275,22 +273,29 @@ final class SelectionTranslationWindowController: NSWindowController {
         let finalFrame = islandFrame()
         let isFirstOpen = !window.isVisible
         transitionGeneration &+= 1
+        let generation = transitionGeneration
         window.setFrame(finalFrame, display: false)
+        window.ignoresMouseEvents = false
 
         if isFirstOpen {
-            // Open: set phase=.opened immediately so there's no pill flash,
-            // then fade the window in with alphaValue animation.
-            islandModel.phase = .opened
-            window.alphaValue = 0
+            islandModel.phase = .closed
+            window.alphaValue = 1
             window.orderFrontRegardless()
             window.makeKey()
             startDismissMonitoring()
-            NSAnimationContext.runAnimationGroup { ctx in
-                ctx.duration = 0.2
-                window.animator().alphaValue = 1
+
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.transitionGeneration == generation else { return }
+                self.islandModel.phase = .opening
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.14) { [weak self] in
+                    guard let self, self.transitionGeneration == generation else { return }
+                    self.islandModel.phase = .opened
+                }
             }
         } else {
-            islandModel.phase = .opened
+            if islandModel.phase != .opened {
+                islandModel.phase = .opened
+            }
             window.orderFrontRegardless()
             window.makeKey()
             startDismissMonitoring()
@@ -397,6 +402,7 @@ private enum TranslationMode {
 
 private enum TranslationIslandPhase {
     case closed
+    case opening
     case opened
 }
 
@@ -434,22 +440,26 @@ private struct TranslationIslandView: View {
     private let closedSize = CGSize(width: 246, height: 28)
     private let openedContentHorizontalInset: CGFloat = 24
 
-    private var isOpened: Bool {
+    private var usesOpenedSurface: Bool {
+        model.phase != .closed
+    }
+
+    private var showsOpenedContent: Bool {
         model.phase == .opened
     }
 
     private var panelAnimation: Animation {
-        isOpened ? translationIslandOpenAnimation : translationIslandCloseAnimation
+        usesOpenedSurface ? translationIslandOpenAnimation : translationIslandCloseAnimation
     }
 
     private var currentSurfaceSize: CGSize {
-        isOpened ? openedSize : closedSize
+        usesOpenedSurface ? openedSize : closedSize
     }
 
     private var surfaceShape: TranslationIslandShape {
         TranslationIslandShape(
-            topRadius: isOpened ? 20 : 6,
-            bottomRadius: isOpened ? 32 : 18
+            topRadius: usesOpenedSurface ? 20 : 6,
+            bottomRadius: usesOpenedSurface ? 32 : 18
         )
     }
 
@@ -465,27 +475,27 @@ private struct TranslationIslandView: View {
                         width: openedSize.width - openedContentHorizontalInset * 2,
                         height: openedSize.height
                     )
-                    .clipShape(surfaceShape)
-                    .opacity(isOpened ? 1 : 0)
-                    .blur(radius: isOpened ? 0 : 5)
-                    .scaleEffect(isOpened ? 1 : 0.985, anchor: .top)
-                    .offset(y: isOpened ? 0 : -8)
-                    .allowsHitTesting(isOpened)
+                    .opacity(showsOpenedContent ? 1 : 0)
+                    .blur(radius: showsOpenedContent ? 0 : 5)
+                    .scaleEffect(showsOpenedContent ? 1 : 0.985, anchor: .top)
+                    .offset(y: showsOpenedContent ? 0 : -8)
+                    .allowsHitTesting(showsOpenedContent)
+                    .animation(.easeOut(duration: 0.16).delay(0.08), value: showsOpenedContent)
             }
             .frame(
                 width: currentSurfaceSize.width,
                 height: currentSurfaceSize.height,
                 alignment: .top
             )
-            .scaleEffect(isOpened ? 1 : 0.98, anchor: .top)
+            .scaleEffect(usesOpenedSurface ? 1 : 0.98, anchor: .top)
             .clipShape(surfaceShape)
             .overlay {
                 surfaceShape
-                    .stroke(Color.white.opacity(isOpened ? 0.72 : 0.82), lineWidth: 1)
+                    .stroke(Color.white.opacity(usesOpenedSurface ? 0.72 : 0.82), lineWidth: 1)
             }
             .overlay {
                 surfaceShape
-                    .stroke(Color.black.opacity(isOpened ? 0.035 : 0.025), lineWidth: 0.5)
+                    .stroke(Color.black.opacity(usesOpenedSurface ? 0.035 : 0.025), lineWidth: 0.5)
             }
         }
         .frame(width: openedSize.width, height: openedSize.height, alignment: .top)
@@ -496,16 +506,16 @@ private struct TranslationIslandView: View {
         ZStack {
             surfaceShape
             .fill(.ultraThinMaterial)
-            .shadow(color: Color.black.opacity(isOpened ? 0.075 : 0.065), radius: isOpened ? 36 : 16, x: 0, y: isOpened ? 22 : 9)
-            .shadow(color: Color.black.opacity(isOpened ? 0.035 : 0.03), radius: isOpened ? 9 : 5, x: 0, y: isOpened ? 5 : 2)
+            .shadow(color: Color.black.opacity(usesOpenedSurface ? 0.075 : 0.065), radius: usesOpenedSurface ? 36 : 16, x: 0, y: usesOpenedSurface ? 22 : 9)
+            .shadow(color: Color.black.opacity(usesOpenedSurface ? 0.035 : 0.03), radius: usesOpenedSurface ? 9 : 5, x: 0, y: usesOpenedSurface ? 5 : 2)
 
             surfaceShape
             .fill(
                 LinearGradient(
                     colors: [
-                        Color.white.opacity(isOpened ? 0.9 : 0.96),
-                        Color(red: 0.97, green: 0.98, blue: 0.99).opacity(isOpened ? 0.78 : 0.9),
-                        Color.white.opacity(isOpened ? 0.68 : 0.82)
+                        Color.white.opacity(usesOpenedSurface ? 0.9 : 0.96),
+                        Color(red: 0.97, green: 0.98, blue: 0.99).opacity(usesOpenedSurface ? 0.78 : 0.9),
+                        Color.white.opacity(usesOpenedSurface ? 0.68 : 0.82)
                     ],
                     startPoint: .top,
                     endPoint: .bottom
@@ -516,17 +526,17 @@ private struct TranslationIslandView: View {
             .fill(
                 RadialGradient(
                     colors: [
-                        Color.white.opacity(isOpened ? 0.48 : 0.36),
+                        Color.white.opacity(usesOpenedSurface ? 0.48 : 0.36),
                         Color.white.opacity(0)
                     ],
                     center: .topLeading,
                     startRadius: 8,
-                    endRadius: isOpened ? 280 : 120
+                    endRadius: usesOpenedSurface ? 280 : 120
                 )
             )
 
             DotField()
-                .opacity(isOpened ? 0.18 : 0.08)
+                .opacity(usesOpenedSurface ? 0.18 : 0.08)
                 .mask(
                     LinearGradient(
                         colors: [.black, .black.opacity(0.1), .clear],

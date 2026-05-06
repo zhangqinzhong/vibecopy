@@ -8,12 +8,14 @@ final class SelectionTranslationWindowController: NSWindowController {
     private static let hoverOpenDelay: TimeInterval = 0.12
 
     private let translationService: TranslationService
+    private let settings: AppSettingsModel
+    private let showSettingsAction: () -> Void
     private let islandModel = TranslationIslandModel()
     private weak var hostingView: NSView?
     private var lastSourceText = ""
     private var lastTranslatedText = ""
-    private var sourceLanguage = "zh_CN"
-    private var targetLanguage = "en_US"
+    private var sourceLanguage: String { settings.sourceLanguageCode }
+    private var targetLanguage: String { settings.targetLanguageCode }
     private var manualTranslationGeneration = 0
     private var isPinned = false
     private var localEventMonitor: Any?
@@ -26,8 +28,14 @@ final class SelectionTranslationWindowController: NSWindowController {
         window?.isVisible == true
     }
 
-    init(translationService: TranslationService) {
+    init(
+        translationService: TranslationService,
+        settings: AppSettingsModel,
+        showSettings: @escaping () -> Void
+    ) {
         self.translationService = translationService
+        self.settings = settings
+        self.showSettingsAction = showSettings
 
         let window = TranslationIslandPanel(
             contentRect: NSRect(origin: .zero, size: Self.islandSize),
@@ -51,6 +59,7 @@ final class SelectionTranslationWindowController: NSWindowController {
         super.init(window: window)
 
         setupNativeView()
+        syncModelFromSettings()
         positionAtIsland()
     }
 
@@ -67,7 +76,7 @@ final class SelectionTranslationWindowController: NSWindowController {
         scheduledTranslation?.cancel()
         lastSourceText = sourceText
         lastTranslatedText = ""
-        applyDetectedLanguagePair(for: sourceText)
+        syncModelFromSettings()
         render(
             mode: .loading,
             sourceText: sourceText,
@@ -82,7 +91,7 @@ final class SelectionTranslationWindowController: NSWindowController {
         scheduledTranslation?.cancel()
         lastSourceText = result.sourceText
         lastTranslatedText = result.translatedText
-        applyDetectedLanguagePair(for: result.sourceText)
+        syncModelFromSettings()
         render(
             mode: .result,
             sourceText: result.sourceText,
@@ -148,11 +157,14 @@ final class SelectionTranslationWindowController: NSWindowController {
             },
             swapLanguages: { [weak self] in self?.swapLanguages() },
             togglePin: { [weak self] in self?.togglePin() },
+            showSettings: { [weak self] in self?.showSettingsAction() },
+            selectSourceLanguage: { [weak self] option in self?.selectSourceLanguage(option) },
+            selectTargetLanguage: { [weak self] option in self?.selectTargetLanguage(option) },
             dismiss: { [weak self] in self?.dismissIsland() }
         )
 
         let hostingView = TranslationIslandHostingView(
-            rootView: TranslationIslandView(model: islandModel, actions: actions)
+            rootView: TranslationIslandView(model: islandModel, settings: settings, actions: actions)
         )
         hostingView.controller = self
         hostingView.translatesAutoresizingMaskIntoConstraints = false
@@ -176,6 +188,7 @@ final class SelectionTranslationWindowController: NSWindowController {
         sourceLanguage: String,
         targetLanguage: String
     ) {
+        syncModelFromSettings()
         islandModel.mode = mode
         islandModel.sourceText = sourceText
         islandModel.translatedText = translatedText
@@ -198,7 +211,7 @@ final class SelectionTranslationWindowController: NSWindowController {
         }
 
         let workItem = DispatchWorkItem { [weak self] in
-            self?.translateTypedText(trimmed, sourceLanguage: self?.sourceLanguage, targetLanguage: self?.targetLanguage)
+            self?.translateTypedText(text, sourceLanguage: self?.sourceLanguage, targetLanguage: self?.targetLanguage)
         }
         scheduledTranslation = workItem
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.65, execute: workItem)
@@ -220,19 +233,16 @@ final class SelectionTranslationWindowController: NSWindowController {
             return
         }
 
-        if let sourceLanguage {
-            self.sourceLanguage = sourceLanguage
-        }
-        if let targetLanguage {
-            self.targetLanguage = targetLanguage
-        }
+        if let sourceLanguage { settings.sourceLanguageCode = sourceLanguage }
+        if let targetLanguage { settings.targetLanguageCode = targetLanguage }
+        syncModelFromSettings()
 
         manualTranslationGeneration &+= 1
         let generation = manualTranslationGeneration
         lastTranslatedText = ""
         render(
             mode: .loading,
-            sourceText: trimmed,
+            sourceText: text,
             translatedText: "",
             sourceLanguage: self.sourceLanguage,
             targetLanguage: self.targetLanguage
@@ -249,7 +259,7 @@ final class SelectionTranslationWindowController: NSWindowController {
                 self.lastTranslatedText = result.translatedText
                 self.render(
                     mode: .result,
-                    sourceText: result.sourceText,
+                    sourceText: self.lastSourceText,
                     translatedText: result.translatedText,
                     sourceLanguage: self.sourceLanguage,
                     targetLanguage: self.targetLanguage
@@ -259,9 +269,20 @@ final class SelectionTranslationWindowController: NSWindowController {
     }
 
     private func swapLanguages() {
-        swap(&sourceLanguage, &targetLanguage)
-        islandModel.sourceLanguage = sourceLanguage
-        islandModel.targetLanguage = targetLanguage
+        settings.swapLanguages()
+        syncModelFromSettings()
+        translateTypedText(lastSourceText, sourceLanguage: sourceLanguage, targetLanguage: targetLanguage)
+    }
+
+    private func selectSourceLanguage(_ option: TranslationLanguageOption) {
+        settings.selectSourceLanguage(option)
+        syncModelFromSettings()
+        translateTypedText(lastSourceText, sourceLanguage: sourceLanguage, targetLanguage: targetLanguage)
+    }
+
+    private func selectTargetLanguage(_ option: TranslationLanguageOption) {
+        settings.selectTargetLanguage(option)
+        syncModelFromSettings()
         translateTypedText(lastSourceText, sourceLanguage: sourceLanguage, targetLanguage: targetLanguage)
     }
 
@@ -275,6 +296,12 @@ final class SelectionTranslationWindowController: NSWindowController {
         guard !text.isEmpty else { return }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
+    }
+
+    private func syncModelFromSettings() {
+        islandModel.sourceLanguage = settings.sourceLanguageCode
+        islandModel.targetLanguage = settings.targetLanguageCode
+        islandModel.themePreference = settings.themePreference
     }
 
     private func presentIsland() {
@@ -471,16 +498,6 @@ final class SelectionTranslationWindowController: NSWindowController {
             screen.auxiliaryTopRightArea?.isEmpty == false
     }
 
-    private func applyDetectedLanguagePair(for text: String) {
-        if Self.containsChinese(text) {
-            sourceLanguage = "zh_CN"
-            targetLanguage = "en_US"
-        } else {
-            sourceLanguage = "en_US"
-            targetLanguage = "zh_CN"
-        }
-    }
-
     private static func containsChinese(_ text: String) -> Bool {
         text.unicodeScalars.contains { scalar in
             (0x4E00...0x9FFF).contains(Int(scalar.value)) ||
@@ -547,6 +564,22 @@ private enum TranslationIslandPhase {
 private let translationIslandOpenAnimation = Animation.spring(response: 0.42, dampingFraction: 0.8, blendDuration: 0)
 private let translationIslandCloseAnimation = Animation.smooth(duration: 0.3)
 
+private struct TranslationPalette {
+    let theme: AppThemePreference
+
+    var isDark: Bool { theme == .dark }
+    var ink: Color { isDark ? Color(red: 0.91, green: 0.94, blue: 0.96) : Color(red: 0.08, green: 0.09, blue: 0.11) }
+    var muted: Color { isDark ? Color(red: 0.62, green: 0.66, blue: 0.7) : Color(red: 0.38, green: 0.4, blue: 0.42) }
+    var cyan: Color { Color(red: 0.07, green: 0.75, blue: 0.82) }
+    var placeholder: Color { isDark ? Color.white.opacity(0.18) : Color(red: 0.08, green: 0.09, blue: 0.11).opacity(0.22) }
+    var surfaceTop: Color { isDark ? Color(red: 0.13, green: 0.15, blue: 0.17) : .white }
+    var surfaceMiddle: Color { isDark ? Color(red: 0.09, green: 0.11, blue: 0.13) : Color(red: 0.97, green: 0.98, blue: 0.99) }
+    var surfaceBottom: Color { isDark ? Color(red: 0.06, green: 0.075, blue: 0.09) : .white }
+    var buttonFill: Color { isDark ? Color(red: 0.16, green: 0.18, blue: 0.2) : .white }
+    var highlight: Color { isDark ? Color.white.opacity(0.16) : .white }
+    var shadow: Color { .black }
+}
+
 private final class TranslationIslandModel: ObservableObject {
     @Published var phase: TranslationIslandPhase = .closed
     @Published var mode: TranslationMode = .empty
@@ -556,6 +589,7 @@ private final class TranslationIslandModel: ObservableObject {
     @Published var targetLanguage = "en_US"
     @Published var isPinned = false
     @Published var closedSize = CGSize(width: 246, height: 28)
+    @Published var themePreference: AppThemePreference = .system
 }
 
 private struct TranslationIslandActions {
@@ -568,11 +602,15 @@ private struct TranslationIslandActions {
     var speakResult: () -> Void
     var swapLanguages: () -> Void
     var togglePin: () -> Void
+    var showSettings: () -> Void
+    var selectSourceLanguage: (TranslationLanguageOption) -> Void
+    var selectTargetLanguage: (TranslationLanguageOption) -> Void
     var dismiss: () -> Void
 }
 
 private struct TranslationIslandView: View {
     @ObservedObject var model: TranslationIslandModel
+    @ObservedObject var settings: AppSettingsModel
     let actions: TranslationIslandActions
 
     private let openedSize = CGSize(width: 600, height: 360)
@@ -608,7 +646,18 @@ private struct TranslationIslandView: View {
             ZStack(alignment: .top) {
                 islandSurface
 
-                TranslationIslandContent(model: model, actions: actions)
+                if !usesOpenedSurface {
+                    HStack(spacing: 0) {
+                        MiniIslandPetGlyph(tint: palette.cyan)
+                        Spacer(minLength: 0)
+                        MiniIslandPetGlyph(tint: Color.orange)
+                    }
+                    .frame(width: max(0, model.closedSize.width - 18), height: model.closedSize.height)
+                    .padding(.top, max(0, (model.closedSize.height - 24) / 2))
+                    .allowsHitTesting(false)
+                }
+
+                TranslationIslandContent(model: model, settings: settings, actions: actions)
                     .frame(
                         width: openedSize.width - openedContentHorizontalInset * 2,
                         height: openedSize.height
@@ -638,22 +687,27 @@ private struct TranslationIslandView: View {
         }
         .frame(width: openedSize.width, height: openedSize.height, alignment: .top)
         .animation(panelAnimation, value: model.phase)
+        .preferredColorScheme(settings.preferredColorScheme)
+    }
+
+    private var palette: TranslationPalette {
+        TranslationPalette(theme: model.themePreference)
     }
 
     private var islandSurface: some View {
         ZStack {
             surfaceShape
             .fill(.ultraThinMaterial)
-            .shadow(color: Color.black.opacity(usesOpenedSurface ? 0.075 : 0.065), radius: usesOpenedSurface ? 36 : 16, x: 0, y: usesOpenedSurface ? 22 : 9)
-            .shadow(color: Color.black.opacity(usesOpenedSurface ? 0.035 : 0.03), radius: usesOpenedSurface ? 9 : 5, x: 0, y: usesOpenedSurface ? 5 : 2)
+            .shadow(color: palette.shadow.opacity(usesOpenedSurface ? 0.075 : 0.065), radius: usesOpenedSurface ? 36 : 16, x: 0, y: usesOpenedSurface ? 22 : 9)
+            .shadow(color: palette.shadow.opacity(usesOpenedSurface ? 0.035 : 0.03), radius: usesOpenedSurface ? 9 : 5, x: 0, y: usesOpenedSurface ? 5 : 2)
 
             surfaceShape
             .fill(
                 LinearGradient(
                     colors: [
-                        Color.white.opacity(usesOpenedSurface ? 0.9 : 0.96),
-                        Color(red: 0.97, green: 0.98, blue: 0.99).opacity(usesOpenedSurface ? 0.78 : 0.9),
-                        Color.white.opacity(usesOpenedSurface ? 0.68 : 0.82)
+                        palette.surfaceTop.opacity(usesOpenedSurface ? 0.9 : 0.96),
+                        palette.surfaceMiddle.opacity(usesOpenedSurface ? 0.78 : 0.9),
+                        palette.surfaceBottom.opacity(usesOpenedSurface ? 0.68 : 0.82)
                     ],
                     startPoint: .top,
                     endPoint: .bottom
@@ -688,11 +742,12 @@ private struct TranslationIslandView: View {
 
 private struct TranslationIslandContent: View {
     @ObservedObject var model: TranslationIslandModel
+    @ObservedObject var settings: AppSettingsModel
     let actions: TranslationIslandActions
 
-    private let ink = Color(red: 0.08, green: 0.09, blue: 0.11)
-    private let muted = Color(red: 0.38, green: 0.4, blue: 0.42)
-    private let cyan = Color(red: 0.07, green: 0.75, blue: 0.82)
+    private var palette: TranslationPalette {
+        TranslationPalette(theme: model.themePreference)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -701,12 +756,16 @@ private struct TranslationIslandContent: View {
                 .padding(.top, 10)
 
             TranslationPane(
-                language: languageLabel(for: model.sourceLanguage),
-                languageColor: ink,
+                language: settings.languageLabel(for: model.sourceLanguage),
+                languageColor: palette.ink,
                 text: sourceBinding,
                 placeholder: "输入文本",
                 isSource: true,
                 mode: model.mode,
+                palette: palette,
+                languageOptions: settings.supportedLanguages,
+                selectedLanguageCode: model.sourceLanguage,
+                selectLanguage: actions.selectSourceLanguage,
                 actions: [
                     TranslationActionButton(systemName: "speaker.wave.2", action: actions.speakSource),
                     TranslationActionButton(systemName: "doc.on.doc", action: actions.copySource)
@@ -719,12 +778,16 @@ private struct TranslationIslandContent: View {
                 .frame(height: 46)
 
             TranslationPane(
-                language: languageLabel(for: model.targetLanguage),
-                languageColor: cyan,
+                language: settings.languageLabel(for: model.targetLanguage),
+                languageColor: palette.cyan,
                 text: .constant(resultText),
                 placeholder: "Enter text",
                 isSource: false,
                 mode: model.mode,
+                palette: palette,
+                languageOptions: settings.supportedLanguages,
+                selectedLanguageCode: model.targetLanguage,
+                selectLanguage: actions.selectTargetLanguage,
                 actions: [
                     TranslationActionButton(systemName: "speaker.wave.2", action: actions.speakResult),
                     TranslationActionButton(systemName: "doc.on.doc", action: actions.copyResult),
@@ -745,7 +808,7 @@ private struct TranslationIslandContent: View {
             Spacer()
             TranslationActionButton(systemName: "star", action: {})
             TranslationActionButton(systemName: "viewfinder", action: {})
-            TranslationActionButton(systemName: "gearshape", action: {})
+            TranslationActionButton(systemName: "gearshape", action: actions.showSettings)
         }
     }
 
@@ -760,17 +823,17 @@ private struct TranslationIslandContent: View {
             Button(action: actions.swapLanguages) {
                 Image(systemName: "arrow.up.arrow.down")
                     .font(.system(size: 21, weight: .semibold))
-                    .foregroundStyle(cyan)
+                    .foregroundStyle(palette.cyan)
                     .frame(width: 42, height: 42)
                     .background(
                         Circle()
-                            .fill(Color.white.opacity(0.92))
-                            .shadow(color: Color.black.opacity(0.13), radius: 10, x: 0, y: 5)
-                            .shadow(color: Color.white.opacity(0.85), radius: 5, x: 0, y: -1)
+                            .fill(palette.buttonFill.opacity(0.92))
+                            .shadow(color: palette.shadow.opacity(0.13), radius: 10, x: 0, y: 5)
+                            .shadow(color: palette.highlight.opacity(0.85), radius: 5, x: 0, y: -1)
                     )
                     .overlay(
                         Circle()
-                            .stroke(Color.black.opacity(0.055), lineWidth: 0.75)
+                            .stroke(palette.shadow.opacity(0.055), lineWidth: 0.75)
                     )
             }
             .buttonStyle(.plain)
@@ -794,16 +857,6 @@ private struct TranslationIslandContent: View {
         return ""
     }
 
-    private func languageLabel(for code: String) -> String {
-        switch code {
-        case "zh_CN":
-            return "中文（普通话，简体）"
-        case "en_US":
-            return "英语（美国）"
-        default:
-            return code
-        }
-    }
 }
 
 private struct TranslationPane: View {
@@ -813,14 +866,27 @@ private struct TranslationPane: View {
     let placeholder: String
     let isSource: Bool
     let mode: TranslationMode
+    let palette: TranslationPalette
+    let languageOptions: [TranslationLanguageOption]
+    let selectedLanguageCode: String
+    let selectLanguage: (TranslationLanguageOption) -> Void
     let actions: [TranslationActionButton]
-
-    private let ink = Color(red: 0.08, green: 0.09, blue: 0.11)
-    private let quiet = Color(red: 0.08, green: 0.09, blue: 0.11).opacity(0.22)
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Button(action: {}) {
+            Menu {
+                ForEach(languageOptions) { option in
+                    Button {
+                        selectLanguage(option)
+                    } label: {
+                        if option.id == selectedLanguageCode {
+                            Label(option.displayName, systemImage: "checkmark")
+                        } else {
+                            Text(option.displayName)
+                        }
+                    }
+                }
+            } label: {
                 HStack(spacing: 6) {
                     Text(language)
                         .font(.system(size: 19, weight: .bold))
@@ -829,24 +895,25 @@ private struct TranslationPane: View {
                 }
                 .foregroundStyle(languageColor)
             }
-            .buttonStyle(.plain)
+            .menuStyle(.borderlessButton)
+            .fixedSize()
 
             ZStack(alignment: .topLeading) {
                 if isSource {
                     if text.isEmpty {
                         Text(placeholder)
                             .font(.system(size: 38, weight: .bold))
-                            .foregroundStyle(quiet)
+                            .foregroundStyle(palette.placeholder)
                             .allowsHitTesting(false)
                     }
-                    BoundedTextInput(text: $text, fontSize: 38)
+                    BoundedTextInput(text: $text, fontSize: 38, palette: palette)
                         .frame(maxWidth: .infinity)
                         .frame(height: 50)
                         .clipped()
                 } else {
                     Text(displayText)
                         .font(.system(size: text.isEmpty ? 38 : 34, weight: .bold))
-                        .foregroundStyle(text.isEmpty ? Color(red: 0.07, green: 0.75, blue: 0.82).opacity(0.3) : ink.opacity(mode == .loading ? 0.48 : 0.9))
+                        .foregroundStyle(text.isEmpty ? palette.cyan.opacity(0.3) : palette.ink.opacity(mode == .loading ? 0.48 : 0.9))
                         .lineLimit(2)
                         .minimumScaleFactor(0.72)
                 }
@@ -890,7 +957,7 @@ private struct TranslationActionButton: View {
                         )
                 }
             }
-            .foregroundStyle(isActive ? Color(red: 0.07, green: 0.75, blue: 0.82) : Color(red: 0.38, green: 0.4, blue: 0.42))
+            .foregroundStyle(isActive ? Color(red: 0.07, green: 0.75, blue: 0.82) : Color.secondary)
             .frame(width: 30, height: 30)
             .contentShape(Rectangle())
         }
@@ -923,6 +990,7 @@ private struct TranslationDividerLine: View {
 private struct BoundedTextInput: NSViewRepresentable {
     @Binding var text: String
     let fontSize: CGFloat
+    let palette: TranslationPalette
 
     func makeCoordinator() -> Coordinator {
         Coordinator(text: $text)
@@ -955,8 +1023,8 @@ private struct BoundedTextInput: NSViewRepresentable {
         textView.textContainer?.heightTracksTextView = false
         textView.textContainer?.maximumNumberOfLines = 2
         textView.font = .systemFont(ofSize: fontSize, weight: .bold)
-        textView.textColor = NSColor(red: 0.08, green: 0.09, blue: 0.11, alpha: 1)
-        textView.insertionPointColor = NSColor(red: 0.08, green: 0.09, blue: 0.11, alpha: 1)
+        textView.textColor = NSColor(palette.ink)
+        textView.insertionPointColor = NSColor(palette.ink)
         textView.string = text
 
         scrollView.documentView = textView
@@ -966,10 +1034,12 @@ private struct BoundedTextInput: NSViewRepresentable {
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         guard let textView = scrollView.documentView as? NSTextView else { return }
-        if textView.string != text {
+        if textView.string != text, !context.coordinator.isEditingMarkedText {
             textView.string = text
         }
         textView.font = .systemFont(ofSize: fontSize, weight: .bold)
+        textView.textColor = NSColor(palette.ink)
+        textView.insertionPointColor = NSColor(palette.ink)
         textView.textContainer?.containerSize = NSSize(
             width: max(0, scrollView.contentSize.width),
             height: CGFloat.greatestFiniteMagnitude
@@ -979,6 +1049,7 @@ private struct BoundedTextInput: NSViewRepresentable {
     final class Coordinator: NSObject, NSTextViewDelegate {
         @Binding var text: String
         weak var textView: NSTextView?
+        var isEditingMarkedText = false
 
         init(text: Binding<String>) {
             _text = text
@@ -986,8 +1057,37 @@ private struct BoundedTextInput: NSViewRepresentable {
 
         func textDidChange(_ notification: Notification) {
             guard let textView = notification.object as? NSTextView else { return }
+            isEditingMarkedText = textView.hasMarkedText()
+            guard !isEditingMarkedText else { return }
             text = textView.string
         }
+
+        func textDidEndEditing(_ notification: Notification) {
+            isEditingMarkedText = false
+            if let textView = notification.object as? NSTextView {
+                text = textView.string
+            }
+        }
+    }
+}
+
+private struct MiniIslandPetGlyph: View {
+    let tint: Color
+
+    var body: some View {
+        Canvas { context, size in
+            let block = min(size.width, size.height) / 5
+            for point in [
+                CGPoint(x: 1, y: 1), CGPoint(x: 3, y: 1),
+                CGPoint(x: 0, y: 2), CGPoint(x: 1, y: 2), CGPoint(x: 2, y: 2), CGPoint(x: 3, y: 2), CGPoint(x: 4, y: 2),
+                CGPoint(x: 1, y: 3), CGPoint(x: 2, y: 3), CGPoint(x: 3, y: 3),
+                CGPoint(x: 0, y: 4), CGPoint(x: 4, y: 4)
+            ] {
+                let rect = CGRect(x: point.x * block, y: point.y * block, width: block * 0.78, height: block * 0.78)
+                context.fill(Path(roundedRect: rect, cornerRadius: block * 0.16), with: .color(tint.opacity(0.72)))
+            }
+        }
+        .frame(width: 22, height: 22)
     }
 }
 

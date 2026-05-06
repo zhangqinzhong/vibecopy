@@ -3,7 +3,14 @@ import AppKit
 final class StatusBarController {
     private let item: NSStatusItem
 
-    init(captureAction: @escaping () -> Void, selectionAction: @escaping () -> Void, previewAction: @escaping () -> Void, clipboardAction: @escaping () -> Void, quitAction: @escaping () -> Void) {
+    init(
+        captureAction: @escaping () -> Void,
+        selectionAction: @escaping () -> Void,
+        previewAction: @escaping () -> Void,
+        clipboardAction: @escaping () -> Void,
+        settingsAction: @escaping () -> Void,
+        quitAction: @escaping () -> Void
+    ) {
         item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         item.button?.title = "VC"
         item.button?.toolTip = "VibeCopy"
@@ -14,6 +21,7 @@ final class StatusBarController {
         menu.addItem(Self.item("截图 OCR 翻译", key: "", action: captureAction))
         menu.addItem(Self.item("剪贴板历史", key: "", action: clipboardAction))
         menu.addItem(.separator())
+        menu.addItem(Self.item("设置...", key: ",", action: settingsAction))
         menu.addItem(Self.item("退出", key: "q", action: quitAction))
         item.menu = menu
     }

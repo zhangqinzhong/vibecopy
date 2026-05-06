@@ -8,6 +8,17 @@ struct TranslationResult {
 }
 
 final class TranslationService: @unchecked Sendable {
+    @MainActor
+    static func prepareLanguagePack(
+        sourceLanguage: String,
+        targetLanguage: String,
+        completion: @escaping @MainActor () -> Void
+    ) {
+        let source = Locale.Language(identifier: toLocaleIdentifier(sourceLanguage))
+        let target = Locale.Language(identifier: toLocaleIdentifier(targetLanguage))
+        TranslationDownloadPresenter.present(source: source, target: target, completion: completion)
+    }
+
     func translate(
         _ text: String,
         sourceLanguage: String? = nil,

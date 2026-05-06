@@ -1,13 +1,18 @@
 import AppKit
 import Carbon
 
+@MainActor
 final class SelectionTranslator {
     private let translationService: TranslationService
+    private let settings: AppSettingsModel
+    private let showSettings: () -> Void
     private let reader = SelectedTextReader()
     private var windowController: SelectionTranslationWindowController?
 
-    init(translationService: TranslationService) {
+    init(translationService: TranslationService, settings: AppSettingsModel, showSettings: @escaping () -> Void) {
         self.translationService = translationService
+        self.settings = settings
+        self.showSettings = showSettings
     }
 
     func translateCurrentSelection() {
@@ -20,7 +25,11 @@ final class SelectionTranslator {
             }
 
             self.showLoading(sourceText: trimmed)
-            self.translationService.translate(trimmed) { [weak self] result in
+            self.translationService.translate(
+                trimmed,
+                sourceLanguage: self.settings.sourceLanguageCode,
+                targetLanguage: self.settings.targetLanguageCode
+            ) { [weak self] result in
                 DispatchQueue.main.async {
                     self?.windowController?.show(result: result)
                 }
@@ -30,13 +39,21 @@ final class SelectionTranslator {
 
     private func showLoading(sourceText: String) {
         NSApp.activate(ignoringOtherApps: true)
-        windowController = SelectionTranslationWindowController(translationService: translationService)
+        windowController = SelectionTranslationWindowController(
+            translationService: translationService,
+            settings: settings,
+            showSettings: showSettings
+        )
         windowController?.showLoading(sourceText: sourceText)
     }
 
     private func showFailure() {
         NSApp.activate(ignoringOtherApps: true)
-        windowController = SelectionTranslationWindowController(translationService: translationService)
+        windowController = SelectionTranslationWindowController(
+            translationService: translationService,
+            settings: settings,
+            showSettings: showSettings
+        )
         windowController?.showNoSelection()
     }
 }

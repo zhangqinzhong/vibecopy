@@ -300,3 +300,23 @@ The translation island now behaves more like Open Island when dismissed: it coll
 - Added local and global mouse monitoring so hovering over the closed entrance reopens the island after a short delay.
 - Changed collapse behavior from click-outside-only to pointer-leave: once opened, moving the mouse outside the island frame automatically collapses it back to the notch entrance.
 - Kept the closed transparent window from intercepting desktop clicks by ignoring mouse events while collapsed.
+
+## 2026-05-06 - Settings, Theme, Language Management, and Input Stability
+
+VibeCopy now has the first native settings window and shared settings model for appearance and translation language preferences.
+
+### Implemented
+
+- Added an AppKit-hosted SwiftUI settings window with General, Appearance, Language, and About panes.
+- Added a persisted theme preference: follow system, light, or dark. The translation island and settings window read the same setting.
+- Added Apple Translation supported-language discovery and language status refresh in Settings.
+- Made source and target language labels in the island selectable menus backed by the same language list.
+- Added a language-pack preparation action using the public `.translationTask`/`prepareTranslation()` flow.
+- Added lightweight closed-island pixel glyph placeholders for the left translation side and the future right clipboard-history side.
+- Preserved source text while translating typed input so trailing spaces are not rewritten away by translated results.
+- Avoided updating SwiftUI text state while NSTextView has marked text, reducing pinyin composition interruptions.
+
+### Notes
+
+- macOS owns Translation language-pack downloads. VibeCopy refreshes public API status after prepare/download flows instead of relying on private system notifications.
+- The right-side clipboard-history entrance remains a planned follow-up; this pass only reserves the visual/structural slot.

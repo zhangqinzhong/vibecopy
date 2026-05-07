@@ -1,10 +1,13 @@
 import AppKit
+import Combine
 import SwiftUI
 
+@MainActor
 final class SettingsWindowController: NSWindowController {
+    private var themeCancellable: AnyCancellable?
+
     init(settings: AppSettingsModel) {
         let rootView = SettingsView(settings: settings)
-            .preferredColorScheme(settings.preferredColorScheme)
         let hosting = NSHostingController(rootView: rootView)
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 760, height: 540),
@@ -15,13 +18,24 @@ final class SettingsWindowController: NSWindowController {
         window.title = "VibeCopy 设置"
         window.titleVisibility = .visible
         window.titlebarAppearsTransparent = false
+        window.appearance = Self.appearance(for: settings.themePreference)
         window.contentViewController = hosting
         window.center()
         super.init(window: window)
+
+        themeCancellable = settings.$themePreference
+            .sink { [weak window] preference in
+                window?.appearance = preference.resolvedAppearance
+                window?.contentView?.needsDisplay = true
+            }
     }
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+
+    private static func appearance(for preference: AppThemePreference) -> NSAppearance? {
+        preference.resolvedAppearance
     }
 }
 
@@ -55,26 +69,80 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
 private struct SettingsView: View {
     @ObservedObject var settings: AppSettingsModel
     @State private var selectedTab: SettingsTab = .general
+    private var isDark: Bool { settings.themePreference.resolvesToDark }
 
     var body: some View {
-        NavigationSplitView {
-            List(selection: $selectedTab) {
-                ForEach(SettingsTab.allCases) { tab in
-                    Label(tab.title, systemImage: tab.icon)
-                        .tag(tab)
-                }
+        HStack(spacing: 0) {
+            sidebar
+
+            Divider()
+
+            VStack(spacing: 0) {
+                Text(selectedTab.title)
+                    .font(.system(size: 22, weight: .bold))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 32)
+                    .padding(.top, 24)
+                    .padding(.bottom, 14)
+
+                Divider()
+
+                detailView
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .listStyle(.sidebar)
-            .navigationSplitViewColumnWidth(min: 170, ideal: 190, max: 220)
-        } detail: {
-            detailView
+            .background(contentBackground)
         }
         .frame(minWidth: 700, minHeight: 500)
         .preferredColorScheme(settings.preferredColorScheme)
-        .toolbar(removing: .sidebarToggle)
+        .background(contentBackground)
         .onAppear {
             settings.refreshSupportedLanguages()
         }
+    }
+
+    private var sidebar: some View {
+        VStack(spacing: 8) {
+            Spacer()
+                .frame(height: 18)
+
+            ForEach(SettingsTab.allCases) { tab in
+                Button {
+                    selectedTab = tab
+                } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: tab.icon)
+                            .font(.system(size: 15, weight: .semibold))
+                            .frame(width: 20)
+                        Text(tab.title)
+                            .font(.system(size: 14, weight: .semibold))
+                        Spacer(minLength: 0)
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 50, alignment: .leading)
+                    .padding(.horizontal, 14)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(selectedTab == tab ? Color.primary : Color.secondary)
+                .background(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(selectedTab == tab ? Color.primary.opacity(0.12) : Color.clear)
+                )
+                .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            }
+
+            Spacer()
+        }
+        .padding(.horizontal, 14)
+        .frame(width: 210)
+        .background(sidebarBackground)
+    }
+
+    private var sidebarBackground: Color {
+        isDark ? Color(red: 0.03, green: 0.03, blue: 0.035) : Color(nsColor: .windowBackgroundColor).opacity(0.7)
+    }
+
+    private var contentBackground: Color {
+        isDark ? Color(red: 0.02, green: 0.02, blue: 0.025) : Color(nsColor: .windowBackgroundColor)
     }
 
     @ViewBuilder
@@ -135,7 +203,6 @@ private struct GeneralSettingsPane: View {
             }
         }
         .formStyle(.grouped)
-        .navigationTitle("通用")
     }
 }
 
@@ -170,7 +237,6 @@ private struct AppearanceSettingsPane: View {
             }
         }
         .formStyle(.grouped)
-        .navigationTitle("外观")
     }
 }
 
@@ -187,7 +253,6 @@ private struct LanguageSettingsPane: View {
             .padding(.top, 18)
             .padding(.bottom, 28)
         }
-        .navigationTitle("语言")
         .task {
             if settings.languageStatuses.isEmpty {
                 settings.refreshSupportedLanguages()
@@ -209,23 +274,6 @@ private struct LanguageSettingsPane: View {
                         settings.refreshSupportedLanguages()
                     }
                     .disabled(settings.isRefreshingLanguages)
-                }
-
-                Divider()
-
-                HStack {
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text("当前方向")
-                            .font(.subheadline.weight(.semibold))
-                        Text("\(settings.languageLabel(for: settings.sourceLanguageCode)) -> \(settings.languageLabel(for: settings.targetLanguageCode))")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    Button(settings.isPreparingLanguagePack ? "准备中..." : "下载当前方向") {
-                        settings.prepareSelectedLanguagePack()
-                    }
-                    .disabled(settings.isPreparingLanguagePack)
                 }
             }
             .padding(14)
@@ -270,6 +318,7 @@ private struct LanguageSettingsPane: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+            .frame(width: 150, alignment: .trailing)
 
             if row.canDownload {
                 Button(settings.isPreparingLanguagePack ? "..." : "下载") {
@@ -278,6 +327,9 @@ private struct LanguageSettingsPane: View {
                 .disabled(settings.isPreparingLanguagePack)
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
+            } else {
+                Spacer()
+                    .frame(width: 54)
             }
         }
         .padding(.vertical, 11)
@@ -295,7 +347,6 @@ private struct AboutSettingsPane: View {
             }
         }
         .formStyle(.grouped)
-        .navigationTitle("关于")
     }
 }
 

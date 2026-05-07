@@ -11,11 +11,11 @@ final class TranslationService: @unchecked Sendable {
     @MainActor
     static func prepareLanguagePack(
         sourceLanguage: String,
-        targetLanguage: String,
+        targetLanguage: String?,
         completion: @escaping @MainActor () -> Void
     ) {
         let source = Locale.Language(identifier: toLocaleIdentifier(sourceLanguage))
-        let target = Locale.Language(identifier: toLocaleIdentifier(targetLanguage))
+        let target = targetLanguage.map { Locale.Language(identifier: toLocaleIdentifier($0)) }
         TranslationDownloadPresenter.present(source: source, target: target, completion: completion)
     }
 
@@ -102,7 +102,7 @@ final class TranslationService: @unchecked Sendable {
 private final class TranslationDownloadPresenter {
     static func present(
         source: Locale.Language,
-        target: Locale.Language,
+        target: Locale.Language?,
         completion: @escaping @MainActor () -> Void
     ) {
         let config = TranslationSession.Configuration(source: source, target: target)

@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import Translation
 
@@ -16,12 +17,43 @@ enum AppThemePreference: String, CaseIterable, Identifiable {
         }
     }
 
+    var resolvedColorScheme: ColorScheme {
+        switch self {
+        case .system:
+            return Self.systemColorScheme
+        case .light:
+            return .light
+        case .dark:
+            return .dark
+        }
+    }
+
+    var resolvedAppearance: NSAppearance? {
+        switch resolvedColorScheme {
+        case .light:
+            return NSAppearance(named: .aqua)
+        case .dark:
+            return NSAppearance(named: .darkAqua)
+        @unknown default:
+            return NSAppearance(named: .aqua)
+        }
+    }
+
+    var resolvesToDark: Bool {
+        resolvedColorScheme == .dark
+    }
+
     var label: String {
         switch self {
         case .system: return "跟随系统"
         case .light: return "浅色"
         case .dark: return "深色"
         }
+    }
+
+    private static var systemColorScheme: ColorScheme {
+        let matched = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua])
+        return matched == .darkAqua ? .dark : .light
     }
 }
 
@@ -79,14 +111,15 @@ final class AppSettingsModel: ObservableObject {
     @Published var isPreparingLanguagePack = false
 
     var preferredColorScheme: ColorScheme? {
-        themePreference.colorScheme
+        themePreference.resolvedColorScheme
     }
 
     init() {
         themePreference = AppThemePreference(
             rawValue: UserDefaults.standard.string(forKey: DefaultsKey.themePreference) ?? ""
         ) ?? .system
-        sourceLanguageCode = UserDefaults.standard.string(forKey: DefaultsKey.sourceLanguage) ?? "zh-Hans"
+        let savedSourceLanguage = UserDefaults.standard.string(forKey: DefaultsKey.sourceLanguage)
+        sourceLanguageCode = Self.normalizedInitialSourceLanguage(savedSourceLanguage)
         targetLanguageCode = UserDefaults.standard.string(forKey: DefaultsKey.targetLanguage) ?? "en-US"
     }
 
@@ -102,7 +135,7 @@ final class AppSettingsModel: ObservableObject {
                 .map { TranslationLanguageOption(id: $0.minimalIdentifier, language: $0) }
                 .sorted { $0.displayName.localizedCompare($1.displayName) == .orderedAscending }
 
-            supportedLanguages = options.isEmpty ? Self.fallbackLanguages : options
+            supportedLanguages = options
             normalizeSelectedLanguages()
             await refreshLanguageStatuses()
             isRefreshingLanguages = false
@@ -110,23 +143,13 @@ final class AppSettingsModel: ObservableObject {
     }
 
     func refreshLanguageStatuses() async {
-        let target = language(for: targetLanguageCode)
         let availability = LanguageAvailability()
         var rows: [TranslationLanguageStatus] = []
 
         for option in supportedLanguages {
-            if option.id == targetLanguageCode {
-                rows.append(TranslationLanguageStatus(
-                    id: option.id,
-                    language: option,
-                    state: "当前目标",
-                    detail: "不能翻译到同一种语言",
-                    canDownload: false
-                ))
-                continue
-            }
+            let status = await availability.status(from: option.language, to: nil)
+            guard status != .unsupported else { continue }
 
-            let status = await availability.status(from: option.language, to: target)
             rows.append(TranslationLanguageStatus(
                 id: option.id,
                 language: option,
@@ -137,7 +160,7 @@ final class AppSettingsModel: ObservableObject {
         }
 
         languageStatuses = rows
-        languageStatusMessage = "已刷新 \(rows.count) 种系统支持语言。"
+        languageStatusMessage = rows.isEmpty ? "系统没有返回可管理的 Translation 语言包。" : "已刷新 \(rows.count) 个系统 Translation 语言包。"
     }
 
     func selectSourceLanguage(_ option: TranslationLanguageOption) {
@@ -166,11 +189,11 @@ final class AppSettingsModel: ObservableObject {
     }
 
     func prepareLanguagePack(for option: TranslationLanguageOption) {
-        prepareLanguagePack(source: option.id, target: targetLanguageCode)
+        prepareLanguagePack(source: option.id, target: nil)
     }
 
-    func prepareLanguagePack(source: String, target: String) {
-        guard source != target else {
+    func prepareLanguagePack(source: String, target: String?) {
+        if let target, source == target {
             languageStatusMessage = "源语言和目标语言不能相同。"
             return
         }
@@ -209,7 +232,7 @@ final class AppSettingsModel: ObservableObject {
 
     private func normalizeSelectedLanguages() {
         if !supportedLanguages.contains(where: { $0.id == sourceLanguageCode }) {
-            sourceLanguageCode = supportedLanguages.first(where: { $0.id.hasPrefix("zh") })?.id
+            sourceLanguageCode = Self.preferredSimplifiedChinese(in: supportedLanguages)?.id
                 ?? supportedLanguages.first?.id
                 ?? "zh-Hans"
         }
@@ -223,10 +246,50 @@ final class AppSettingsModel: ObservableObject {
         }
     }
 
+    private static func normalizedInitialSourceLanguage(_ savedLanguage: String?) -> String {
+        guard let savedLanguage, !savedLanguage.isEmpty else {
+            return "zh-Hans"
+        }
+        return isTraditionalChinese(savedLanguage) ? "zh-Hans" : savedLanguage
+    }
+
+    private static func preferredSimplifiedChinese(in options: [TranslationLanguageOption]) -> TranslationLanguageOption? {
+        options
+            .filter { isSimplifiedChinese($0.id) }
+            .sorted { simplifiedChineseRank($0.id) < simplifiedChineseRank($1.id) }
+            .first
+    }
+
+    private static func isSimplifiedChinese(_ identifier: String) -> Bool {
+        let normalized = identifier.replacingOccurrences(of: "_", with: "-").lowercased()
+        return normalized == "zh"
+            || normalized.hasPrefix("zh-hans")
+            || normalized.hasPrefix("zh-cn")
+            || normalized.hasPrefix("zh-sg")
+    }
+
+    private static func isTraditionalChinese(_ identifier: String) -> Bool {
+        let normalized = identifier.replacingOccurrences(of: "_", with: "-").lowercased()
+        return normalized.hasPrefix("zh-hant")
+            || normalized.hasPrefix("zh-tw")
+            || normalized.hasPrefix("zh-hk")
+            || normalized.hasPrefix("zh-mo")
+    }
+
+    private static func simplifiedChineseRank(_ identifier: String) -> Int {
+        let normalized = identifier.replacingOccurrences(of: "_", with: "-").lowercased()
+        if normalized == "zh-hans" { return 0 }
+        if normalized == "zh-hans-cn" { return 1 }
+        if normalized == "zh-cn" { return 2 }
+        if normalized.hasPrefix("zh-hans") { return 3 }
+        if normalized.hasPrefix("zh-sg") { return 4 }
+        return 5
+    }
+
     private func label(for status: LanguageAvailability.Status) -> String {
         switch status {
-        case .installed: return "已安装"
-        case .supported: return "可下载"
+        case .installed: return "已下载"
+        case .supported: return "未下载"
         case .unsupported: return "不支持"
         @unknown default: return "未知"
         }
@@ -234,9 +297,9 @@ final class AppSettingsModel: ObservableObject {
 
     private func detail(for status: LanguageAvailability.Status) -> String {
         switch status {
-        case .installed: return "可以直接翻译"
-        case .supported: return "需要下载系统语言包"
-        case .unsupported: return "系统 Translation 不支持该语言对"
+        case .installed: return "系统语言包已可用"
+        case .supported: return "系统支持，尚未下载"
+        case .unsupported: return "系统 Translation 不支持"
         @unknown default: return "请刷新后重试"
         }
     }

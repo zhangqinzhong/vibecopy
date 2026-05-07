@@ -20,6 +20,7 @@ let package = Package(
                 .linkedFramework("Vision"),
                 .linkedFramework("SwiftUI"),
                 .linkedFramework("Translation"),
+                .linkedFramework("AVFoundation"),
                 .linkedFramework("ScreenCaptureKit")
             ]
         )

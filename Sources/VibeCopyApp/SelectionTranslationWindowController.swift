@@ -1,4 +1,6 @@
 import AppKit
+import AVFoundation
+import Combine
 import SwiftUI
 
 final class SelectionTranslationWindowController: NSWindowController {
@@ -23,6 +25,8 @@ final class SelectionTranslationWindowController: NSWindowController {
     private var hoverOpenWorkItem: DispatchWorkItem?
     private var transitionGeneration = 0
     private var scheduledTranslation: DispatchWorkItem?
+    private var themeCancellable: AnyCancellable?
+    private let speechSynthesizer = AVSpeechSynthesizer()
 
     var isIslandVisible: Bool {
         window?.isVisible == true
@@ -60,6 +64,12 @@ final class SelectionTranslationWindowController: NSWindowController {
 
         setupNativeView()
         syncModelFromSettings()
+        window.appearance = Self.appearance(for: settings.themePreference)
+        themeCancellable = settings.$themePreference
+            .sink { [weak self, weak window] preference in
+                self?.islandModel.themePreference = preference
+                window?.appearance = preference.resolvedAppearance
+            }
         positionAtIsland()
     }
 
@@ -150,10 +160,10 @@ final class SelectionTranslationWindowController: NSWindowController {
                 guard let self else { return }
                 self.copy(Self.identifierText(from: self.lastTranslatedText.isEmpty ? self.lastSourceText : self.lastTranslatedText, style: .snake))
             },
-            speakSource: { [weak self] in NSSpeechSynthesizer().startSpeaking(self?.lastSourceText ?? "") },
+            speakSource: { [weak self] in self?.speak(self?.lastSourceText ?? "") },
             speakResult: { [weak self] in
                 guard let self else { return }
-                NSSpeechSynthesizer().startSpeaking(self.lastTranslatedText.isEmpty ? self.lastSourceText : self.lastTranslatedText)
+                self.speak(self.lastTranslatedText.isEmpty ? self.lastSourceText : self.lastTranslatedText)
             },
             swapLanguages: { [weak self] in self?.swapLanguages() },
             togglePin: { [weak self] in self?.togglePin() },
@@ -298,10 +308,24 @@ final class SelectionTranslationWindowController: NSWindowController {
         NSPasteboard.general.setString(text, forType: .string)
     }
 
+    private func speak(_ text: String) {
+        let spokenText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !spokenText.isEmpty else { return }
+
+        if speechSynthesizer.isSpeaking {
+            speechSynthesizer.stopSpeaking(at: .immediate)
+        }
+        speechSynthesizer.speak(AVSpeechUtterance(string: spokenText))
+    }
+
     private func syncModelFromSettings() {
         islandModel.sourceLanguage = settings.sourceLanguageCode
         islandModel.targetLanguage = settings.targetLanguageCode
         islandModel.themePreference = settings.themePreference
+    }
+
+    private static func appearance(for preference: AppThemePreference) -> NSAppearance? {
+        preference.resolvedAppearance
     }
 
     private func presentIsland() {
@@ -567,16 +591,19 @@ private let translationIslandCloseAnimation = Animation.smooth(duration: 0.3)
 private struct TranslationPalette {
     let theme: AppThemePreference
 
-    var isDark: Bool { theme == .dark }
+    var isDark: Bool { theme.resolvesToDark }
     var ink: Color { isDark ? Color(red: 0.91, green: 0.94, blue: 0.96) : Color(red: 0.08, green: 0.09, blue: 0.11) }
     var muted: Color { isDark ? Color(red: 0.62, green: 0.66, blue: 0.7) : Color(red: 0.38, green: 0.4, blue: 0.42) }
     var cyan: Color { Color(red: 0.07, green: 0.75, blue: 0.82) }
     var placeholder: Color { isDark ? Color.white.opacity(0.18) : Color(red: 0.08, green: 0.09, blue: 0.11).opacity(0.22) }
-    var surfaceTop: Color { isDark ? Color(red: 0.13, green: 0.15, blue: 0.17) : .white }
-    var surfaceMiddle: Color { isDark ? Color(red: 0.09, green: 0.11, blue: 0.13) : Color(red: 0.97, green: 0.98, blue: 0.99) }
-    var surfaceBottom: Color { isDark ? Color(red: 0.06, green: 0.075, blue: 0.09) : .white }
-    var buttonFill: Color { isDark ? Color(red: 0.16, green: 0.18, blue: 0.2) : .white }
-    var highlight: Color { isDark ? Color.white.opacity(0.16) : .white }
+    var surfaceTop: Color { isDark ? Color.black : .white }
+    var surfaceMiddle: Color { isDark ? Color.black : Color(red: 0.97, green: 0.98, blue: 0.99) }
+    var surfaceBottom: Color { isDark ? Color.black : .white }
+    var buttonFill: Color { isDark ? Color(red: 0.055, green: 0.055, blue: 0.065) : .white }
+    var highlight: Color { isDark ? Color.white.opacity(0.06) : .white }
+    var rimOpacity: Double { isDark ? 0.05 : 0.72 }
+    var secondaryRimOpacity: Double { isDark ? 0 : 0.035 }
+    var glowOpacity: Double { isDark ? 0 : 1 }
     var shadow: Color { .black }
 }
 
@@ -678,11 +705,11 @@ private struct TranslationIslandView: View {
             .clipShape(surfaceShape)
             .overlay {
                 surfaceShape
-                    .stroke(Color.white.opacity(usesOpenedSurface ? 0.72 : 0.82), lineWidth: 1)
+                    .stroke(Color.white.opacity(palette.rimOpacity), lineWidth: 1)
             }
             .overlay {
                 surfaceShape
-                    .stroke(Color.black.opacity(usesOpenedSurface ? 0.035 : 0.025), lineWidth: 0.5)
+                    .stroke(Color.black.opacity(palette.secondaryRimOpacity), lineWidth: 0.5)
             }
         }
         .frame(width: openedSize.width, height: openedSize.height, alignment: .top)
@@ -705,9 +732,9 @@ private struct TranslationIslandView: View {
             .fill(
                 LinearGradient(
                     colors: [
-                        palette.surfaceTop.opacity(usesOpenedSurface ? 0.9 : 0.96),
-                        palette.surfaceMiddle.opacity(usesOpenedSurface ? 0.78 : 0.9),
-                        palette.surfaceBottom.opacity(usesOpenedSurface ? 0.68 : 0.82)
+                        palette.surfaceTop.opacity(usesOpenedSurface ? 0.98 : 1),
+                        palette.surfaceMiddle.opacity(usesOpenedSurface ? 0.98 : 1),
+                        palette.surfaceBottom.opacity(usesOpenedSurface ? 0.98 : 1)
                     ],
                     startPoint: .top,
                     endPoint: .bottom
@@ -718,7 +745,7 @@ private struct TranslationIslandView: View {
             .fill(
                 RadialGradient(
                     colors: [
-                        Color.white.opacity(usesOpenedSurface ? 0.48 : 0.36),
+                        Color.white.opacity((usesOpenedSurface ? 0.48 : 0.36) * palette.glowOpacity),
                         Color.white.opacity(0)
                     ],
                     center: .topLeading,

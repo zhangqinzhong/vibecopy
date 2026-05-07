@@ -36,25 +36,28 @@ final class SettingsWindowController: NSWindowController {
 
     func showCentered() {
         guard let window else { return }
-        centerWindowOnActiveScreen(window)
-        showWindow(nil)
+        applyCenteredFrame(to: window, display: false)
         window.makeKeyAndOrderFront(nil)
+        applyCenteredFrame(to: window, display: true)
+        DispatchQueue.main.async { [weak self, weak window] in
+            guard let self, let window else { return }
+            self.applyCenteredFrame(to: window, display: true)
+        }
     }
 
-    private func centerWindowOnActiveScreen(_ window: NSWindow) {
-        let mouseLocation = NSEvent.mouseLocation
-        let screen = NSScreen.screens.first { NSMouseInRect(mouseLocation, $0.frame, false) } ?? NSScreen.main
+    private func applyCenteredFrame(to window: NSWindow, display: Bool) {
+        let screen = window.screen ?? NSScreen.main ?? NSScreen.screens.first
         guard let visibleFrame = screen?.visibleFrame else {
             window.center()
             return
         }
 
-        let frame = window.frame
-        let origin = NSPoint(
-            x: visibleFrame.midX - frame.width / 2,
-            y: visibleFrame.midY - frame.height / 2
+        var frame = window.frame
+        frame.origin = NSPoint(
+            x: visibleFrame.midX - frame.size.width / 2,
+            y: visibleFrame.midY - frame.size.height / 2
         )
-        window.setFrameOrigin(origin)
+        window.setFrame(frame, display: display)
     }
 
     private static func appearance(for preference: AppThemePreference) -> NSAppearance? {

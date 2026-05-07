@@ -53,7 +53,8 @@ final class SelectionTranslationWindowController: NSWindowController {
         )
         window.title = "划词翻译"
         window.titleVisibility = .hidden
-        window.isMovableByWindowBackground = true
+        window.isMovable = false
+        window.isMovableByWindowBackground = false
         window.isOpaque = false
         window.backgroundColor = .clear
         window.hasShadow = false

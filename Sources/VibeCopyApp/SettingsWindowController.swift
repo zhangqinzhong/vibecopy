@@ -375,6 +375,9 @@ private struct AppearanceSettingsPane: View {
 
 private struct LanguageSettingsPane: View {
     @ObservedObject var settings: AppSettingsModel
+    private var paneBackground: Color {
+        Color(nsColor: .controlBackgroundColor)
+    }
 
     var body: some View {
         ScrollView {
@@ -386,6 +389,7 @@ private struct LanguageSettingsPane: View {
             .padding(.top, 18)
             .padding(.bottom, 28)
         }
+        .background(paneBackground)
         .task {
             if settings.languageStatuses.isEmpty {
                 settings.refreshSupportedLanguages()
@@ -402,6 +406,7 @@ private struct LanguageSettingsPane: View {
                 HStack {
                     Text(settings.languageStatusMessage)
                         .foregroundStyle(.secondary)
+                        .lineLimit(2)
                     Spacer()
                     Button(settings.isRefreshingLanguages ? "刷新中..." : "刷新") {
                         settings.refreshSupportedLanguages()
@@ -420,54 +425,79 @@ private struct LanguageSettingsPane: View {
                 .font(.headline)
 
             LazyVStack(spacing: 0) {
-                ForEach(settings.languageStatuses) { row in
+                ForEach(Array(settings.languageStatuses.enumerated()), id: \.element.id) { index, row in
                     languageRow(row)
-                    if row.id != settings.languageStatuses.last?.id {
+                    if index != settings.languageStatuses.indices.last {
                         Divider()
                     }
                 }
             }
-            .padding(.horizontal, 14)
+            .padding(.horizontal, 16)
             .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         }
     }
 
     private func languageRow(_ row: TranslationLanguageStatus) -> some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 14) {
             VStack(alignment: .leading, spacing: 3) {
                 Text(row.language.displayName)
                     .font(.system(size: 14, weight: .semibold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.78)
                 Text(row.language.id)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
 
             Spacer()
 
             VStack(alignment: .trailing, spacing: 3) {
-                Text(row.state)
+                Text(statusTitle(for: row))
                     .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
                 Text(row.detail)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.84)
             }
-            .frame(width: 150, alignment: .trailing)
+            .frame(width: 138, alignment: .trailing)
 
             if row.canDownload {
                 Button(settings.isPreparingLanguagePack ? "..." : "下载") {
                     settings.prepareLanguagePack(for: row.language)
                 }
                 .disabled(settings.isPreparingLanguagePack)
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
+                .buttonStyle(.plain)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.white)
+                .frame(width: 64, height: 28)
+                .background(
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(Color(red: 0.18, green: 0.42, blue: 0.82))
+                )
             } else {
-                Spacer()
-                    .frame(width: 54)
+                Text(row.state)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(row.state == "已下载" ? Color.green : Color.secondary)
+                    .frame(width: 64, height: 28)
+                    .background(
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .fill(row.state == "已下载" ? Color.green.opacity(0.18) : Color.primary.opacity(0.08))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .stroke(row.state == "已下载" ? Color.green.opacity(0.35) : Color.primary.opacity(0.12), lineWidth: 1)
+                    )
             }
         }
-        .padding(.vertical, 11)
+        .padding(.vertical, 12)
     }
 
+    private func statusTitle(for row: TranslationLanguageStatus) -> String {
+        row.canDownload ? row.state : ""
+    }
 }
 
 private struct AboutSettingsPane: View {

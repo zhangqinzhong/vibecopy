@@ -120,7 +120,8 @@ final class AppSettingsModel: ObservableObject {
         ) ?? .system
         let savedSourceLanguage = UserDefaults.standard.string(forKey: DefaultsKey.sourceLanguage)
         sourceLanguageCode = Self.normalizedInitialSourceLanguage(savedSourceLanguage)
-        targetLanguageCode = UserDefaults.standard.string(forKey: DefaultsKey.targetLanguage) ?? "en-US"
+        let savedTargetLanguage = UserDefaults.standard.string(forKey: DefaultsKey.targetLanguage)
+        targetLanguageCode = Self.normalizedInitialTargetLanguage(savedTargetLanguage)
     }
 
     func refreshSupportedLanguages() {
@@ -231,6 +232,9 @@ final class AppSettingsModel: ObservableObject {
     }
 
     private func normalizeSelectedLanguages() {
+        sourceLanguageCode = Self.canonicalLanguageCode(sourceLanguageCode)
+        targetLanguageCode = Self.canonicalLanguageCode(targetLanguageCode)
+
         if !supportedLanguages.contains(where: { $0.id == sourceLanguageCode }) {
             sourceLanguageCode = Self.preferredSimplifiedChinese(in: supportedLanguages)?.id
                 ?? supportedLanguages.first?.id
@@ -251,6 +255,26 @@ final class AppSettingsModel: ObservableObject {
             return "zh-Hans"
         }
         return isTraditionalChinese(savedLanguage) ? "zh-Hans" : savedLanguage
+    }
+
+    private static func normalizedInitialTargetLanguage(_ savedLanguage: String?) -> String {
+        guard let savedLanguage, !savedLanguage.isEmpty else {
+            return "en-US"
+        }
+        return canonicalLanguageCode(savedLanguage)
+    }
+
+    private static func canonicalLanguageCode(_ identifier: String) -> String {
+        switch identifier.replacingOccurrences(of: "_", with: "-") {
+        case "zh-CN", "zh-Hans-CN":
+            return "zh-Hans"
+        case "zh-TW", "zh-Hant-TW":
+            return "zh-Hant"
+        case "en-US", "en-Latn-US":
+            return "en-US"
+        default:
+            return identifier.replacingOccurrences(of: "_", with: "-")
+        }
     }
 
     private static func preferredSimplifiedChinese(in options: [TranslationLanguageOption]) -> TranslationLanguageOption? {

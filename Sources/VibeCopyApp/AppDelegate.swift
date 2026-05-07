@@ -58,8 +58,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func showSettings() {
         NSApp.activate(ignoringOtherApps: true)
-        settingsWindowController.showWindow(nil)
-        settingsWindowController.window?.makeKeyAndOrderFront(nil)
+        settingsWindowController.showCentered()
         settingsModel.refreshSupportedLanguages()
     }
 }

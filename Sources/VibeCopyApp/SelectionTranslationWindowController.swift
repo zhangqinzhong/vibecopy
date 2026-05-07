@@ -16,8 +16,10 @@ final class SelectionTranslationWindowController: NSWindowController {
     private weak var hostingView: NSView?
     private var lastSourceText = ""
     private var lastTranslatedText = ""
-    private var sourceLanguage: String { settings.sourceLanguageCode }
-    private var targetLanguage: String { settings.targetLanguageCode }
+    private var currentSourceLanguage: String
+    private var currentTargetLanguage: String
+    private var sourceLanguage: String { currentSourceLanguage }
+    private var targetLanguage: String { currentTargetLanguage }
     private var manualTranslationGeneration = 0
     private var isPinned = false
     private var localEventMonitor: Any?
@@ -40,6 +42,8 @@ final class SelectionTranslationWindowController: NSWindowController {
         self.translationService = translationService
         self.settings = settings
         self.showSettingsAction = showSettings
+        self.currentSourceLanguage = settings.sourceLanguageCode
+        self.currentTargetLanguage = settings.targetLanguageCode
 
         let window = TranslationIslandPanel(
             contentRect: NSRect(origin: .zero, size: Self.islandSize),
@@ -63,7 +67,7 @@ final class SelectionTranslationWindowController: NSWindowController {
         super.init(window: window)
 
         setupNativeView()
-        syncModelFromSettings()
+        syncModelFromCurrentDirection()
         window.appearance = Self.appearance(for: settings.themePreference)
         themeCancellable = settings.$themePreference
             .sink { [weak self, weak window] preference in
@@ -84,9 +88,10 @@ final class SelectionTranslationWindowController: NSWindowController {
 
     func showLoading(sourceText: String) {
         scheduledTranslation?.cancel()
+        resetDirectionFromDefaults()
         lastSourceText = sourceText
         lastTranslatedText = ""
-        syncModelFromSettings()
+        syncModelFromCurrentDirection()
         render(
             mode: .loading,
             sourceText: sourceText,
@@ -101,7 +106,7 @@ final class SelectionTranslationWindowController: NSWindowController {
         scheduledTranslation?.cancel()
         lastSourceText = result.sourceText
         lastTranslatedText = result.translatedText
-        syncModelFromSettings()
+        syncModelFromCurrentDirection()
         render(
             mode: .result,
             sourceText: result.sourceText,
@@ -114,6 +119,7 @@ final class SelectionTranslationWindowController: NSWindowController {
 
     func showNoSelection() {
         scheduledTranslation?.cancel()
+        resetDirectionFromDefaults()
         lastSourceText = ""
         lastTranslatedText = ""
         render(
@@ -198,7 +204,7 @@ final class SelectionTranslationWindowController: NSWindowController {
         sourceLanguage: String,
         targetLanguage: String
     ) {
-        syncModelFromSettings()
+        syncModelFromCurrentDirection()
         islandModel.mode = mode
         islandModel.sourceText = sourceText
         islandModel.translatedText = translatedText
@@ -243,9 +249,9 @@ final class SelectionTranslationWindowController: NSWindowController {
             return
         }
 
-        if let sourceLanguage { settings.sourceLanguageCode = sourceLanguage }
-        if let targetLanguage { settings.targetLanguageCode = targetLanguage }
-        syncModelFromSettings()
+        if let sourceLanguage { currentSourceLanguage = sourceLanguage }
+        if let targetLanguage { currentTargetLanguage = targetLanguage }
+        syncModelFromCurrentDirection()
 
         manualTranslationGeneration &+= 1
         let generation = manualTranslationGeneration
@@ -279,20 +285,22 @@ final class SelectionTranslationWindowController: NSWindowController {
     }
 
     private func swapLanguages() {
-        settings.swapLanguages()
-        syncModelFromSettings()
+        swap(&currentSourceLanguage, &currentTargetLanguage)
+        syncModelFromCurrentDirection()
         translateTypedText(lastSourceText, sourceLanguage: sourceLanguage, targetLanguage: targetLanguage)
     }
 
     private func selectSourceLanguage(_ option: TranslationLanguageOption) {
-        settings.selectSourceLanguage(option)
-        syncModelFromSettings()
+        guard option.id != currentTargetLanguage else { return }
+        currentSourceLanguage = option.id
+        syncModelFromCurrentDirection()
         translateTypedText(lastSourceText, sourceLanguage: sourceLanguage, targetLanguage: targetLanguage)
     }
 
     private func selectTargetLanguage(_ option: TranslationLanguageOption) {
-        settings.selectTargetLanguage(option)
-        syncModelFromSettings()
+        guard option.id != currentSourceLanguage else { return }
+        currentTargetLanguage = option.id
+        syncModelFromCurrentDirection()
         translateTypedText(lastSourceText, sourceLanguage: sourceLanguage, targetLanguage: targetLanguage)
     }
 
@@ -318,9 +326,14 @@ final class SelectionTranslationWindowController: NSWindowController {
         speechSynthesizer.speak(AVSpeechUtterance(string: spokenText))
     }
 
-    private func syncModelFromSettings() {
-        islandModel.sourceLanguage = settings.sourceLanguageCode
-        islandModel.targetLanguage = settings.targetLanguageCode
+    private func resetDirectionFromDefaults() {
+        currentSourceLanguage = settings.sourceLanguageCode
+        currentTargetLanguage = settings.targetLanguageCode
+    }
+
+    private func syncModelFromCurrentDirection() {
+        islandModel.sourceLanguage = currentSourceLanguage
+        islandModel.targetLanguage = currentTargetLanguage
         islandModel.themePreference = settings.themePreference
     }
 
@@ -612,8 +625,8 @@ private final class TranslationIslandModel: ObservableObject {
     @Published var mode: TranslationMode = .empty
     @Published var sourceText = ""
     @Published var translatedText = ""
-    @Published var sourceLanguage = "zh_CN"
-    @Published var targetLanguage = "en_US"
+    @Published var sourceLanguage = "zh-Hans"
+    @Published var targetLanguage = "en-US"
     @Published var isPinned = false
     @Published var closedSize = CGSize(width: 246, height: 28)
     @Published var themePreference: AppThemePreference = .system
@@ -967,28 +980,86 @@ private struct TranslationActionButton: View {
     var text: String?
     var isActive = false
     var action: () -> Void
+    @State private var isAcknowledging = false
 
     var body: some View {
-        Button(action: action) {
-            Group {
+        Button {
+            action()
+            withAnimation(.easeOut(duration: 0.08)) {
+                isAcknowledging = true
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.16) {
+                withAnimation(.easeOut(duration: 0.14)) {
+                    isAcknowledging = false
+                }
+            }
+        } label: {
+            ZStack {
+                if isActive || isAcknowledging {
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(buttonFill)
+                        .frame(width: 30, height: 30)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                .stroke(buttonStroke, lineWidth: 1)
+                        )
+                }
+
                 if let systemName {
                     Image(systemName: systemName)
-                        .font(.system(size: 18, weight: .medium))
+                        .font(.system(size: symbolSize(for: systemName), weight: .medium))
+                        .symbolRenderingMode(.monochrome)
+                        .frame(width: 20, height: 20)
                 } else if let text {
                     Text(text)
-                        .font(.system(size: 13, weight: .bold))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 4)
-                                .stroke(lineWidth: 1.5)
-                                .frame(width: 23, height: 21)
-                        )
+                        .font(.system(size: 12, weight: .bold))
+                        .frame(width: 20, height: 20)
                 }
             }
             .foregroundStyle(isActive ? Color(red: 0.07, green: 0.75, blue: 0.82) : Color.secondary)
             .frame(width: 30, height: 30)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(TranslationActionButtonStyle())
+    }
+
+    private func symbolSize(for name: String) -> CGFloat {
+        switch name {
+        case "doc.on.doc":
+            return 16
+        case "minus.square":
+            return 16
+        case "speaker.wave.2":
+            return 18
+        default:
+            return 18
+        }
+    }
+
+    private var buttonFill: Color {
+        if isActive {
+            return Color(red: 0.07, green: 0.75, blue: 0.82).opacity(0.16)
+        }
+        if isAcknowledging {
+            return Color(red: 0.07, green: 0.75, blue: 0.82).opacity(0.12)
+        }
+        return Color.clear
+    }
+
+    private var buttonStroke: Color {
+        if isActive || isAcknowledging {
+            return Color(red: 0.07, green: 0.75, blue: 0.82).opacity(0.35)
+        }
+        return Color.clear
+    }
+}
+
+private struct TranslationActionButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.9 : 1)
+            .opacity(configuration.isPressed ? 0.72 : 1)
+            .animation(.easeOut(duration: 0.08), value: configuration.isPressed)
     }
 }
 

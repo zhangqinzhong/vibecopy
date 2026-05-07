@@ -34,6 +34,29 @@ final class SettingsWindowController: NSWindowController {
         fatalError("init(coder:) has not been implemented")
     }
 
+    func showCentered() {
+        guard let window else { return }
+        centerWindowOnActiveScreen(window)
+        showWindow(nil)
+        window.makeKeyAndOrderFront(nil)
+    }
+
+    private func centerWindowOnActiveScreen(_ window: NSWindow) {
+        let mouseLocation = NSEvent.mouseLocation
+        let screen = NSScreen.screens.first { NSMouseInRect(mouseLocation, $0.frame, false) } ?? NSScreen.main
+        guard let visibleFrame = screen?.visibleFrame else {
+            window.center()
+            return
+        }
+
+        let frame = window.frame
+        let origin = NSPoint(
+            x: visibleFrame.midX - frame.width / 2,
+            y: visibleFrame.midY - frame.height / 2
+        )
+        window.setFrameOrigin(origin)
+    }
+
     private static func appearance(for preference: AppThemePreference) -> NSAppearance? {
         preference.resolvedAppearance
     }

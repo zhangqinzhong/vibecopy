@@ -1,5 +1,14 @@
 # VibeCopy Settings, Theme, Language, and Input Stability Plan
 
+## Status
+
+Completed and refined across the 2026-05-06 and 2026-05-07 implementation passes.
+
+Current behavior differs from the original plan in two important ways:
+
+- Settings owns the default translation direction. Every newly opened translation island initializes from that default, while language changes inside the island are temporary to that island session.
+- The Language settings pane is system Translation language-pack management. It uses Apple-supported languages and single-language availability status; it does not display translation-direction or language-pair status.
+
 ## Summary
 
 - Add a native settings window using `NSWindowController + NSHostingController`, keeping the current AppKit app entrypoint.
@@ -14,7 +23,7 @@
 - Persist theme preference and source/target language identifiers in `UserDefaults`.
 - Wire the island gear button and status bar Settings menu item to open Settings.
 - Bind source/target language menus in the island to the supported Translation language list.
-- Use `LanguageAvailability.supportedLanguages` and `status(from:to:)` for language status; use `.translationTask` + `prepareTranslation()` for language-pack preparation.
+- Use `LanguageAvailability.supportedLanguages` and single-language availability status for language-pack management; use `.translationTask` + `prepareTranslation()` for system-managed download preparation.
 - Avoid private system hooks for language-pack download completion; refresh status after public prepare/download flows and when Settings opens.
 - Reserve closed-island left/right side semantics: left for translation, right for future clipboard history. Use lightweight local pixel glyph placeholders for now.
 - Preserve original source text in the UI while sending a trimmed copy to Translation framework for requests.

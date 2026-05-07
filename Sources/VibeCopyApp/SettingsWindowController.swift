@@ -1,4 +1,5 @@
 import AppKit
+import Carbon
 import Combine
 import SwiftUI
 
@@ -18,9 +19,10 @@ final class SettingsWindowController: NSWindowController {
         window.title = "VibeCopy 设置"
         window.titleVisibility = .visible
         window.titlebarAppearsTransparent = false
+        window.setFrameAutosaveName("")
         window.appearance = Self.appearance(for: settings.themePreference)
         window.contentViewController = hosting
-        window.center()
+        Self.applyCenteredFrame(to: window, display: false)
         super.init(window: window)
 
         themeCancellable = settings.$themePreference
@@ -36,17 +38,13 @@ final class SettingsWindowController: NSWindowController {
 
     func showCentered() {
         guard let window else { return }
-        applyCenteredFrame(to: window, display: false)
-        window.makeKeyAndOrderFront(nil)
-        applyCenteredFrame(to: window, display: true)
-        DispatchQueue.main.async { [weak self, weak window] in
-            guard let self, let window else { return }
-            self.applyCenteredFrame(to: window, display: true)
-        }
+        Self.applyCenteredFrame(to: window, display: false)
+        window.orderFrontRegardless()
+        window.makeKey()
     }
 
-    private func applyCenteredFrame(to window: NSWindow, display: Bool) {
-        let screen = window.screen ?? NSScreen.main ?? NSScreen.screens.first
+    private static func applyCenteredFrame(to window: NSWindow, display: Bool) {
+        let screen = NSScreen.main ?? window.screen ?? NSScreen.screens.first
         guard let visibleFrame = screen?.visibleFrame else {
             window.center()
             return
@@ -67,6 +65,7 @@ final class SettingsWindowController: NSWindowController {
 
 private enum SettingsTab: String, CaseIterable, Identifiable {
     case general
+    case shortcuts
     case appearance
     case languages
     case about
@@ -76,6 +75,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .general: return "通用"
+        case .shortcuts: return "快捷键"
         case .appearance: return "外观"
         case .languages: return "语言"
         case .about: return "关于"
@@ -85,6 +85,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
     var icon: String {
         switch self {
         case .general: return "gearshape"
+        case .shortcuts: return "keyboard"
         case .appearance: return "circle.lefthalf.filled"
         case .languages: return "globe"
         case .about: return "info.circle"
@@ -176,6 +177,8 @@ private struct SettingsView: View {
         switch selectedTab {
         case .general:
             GeneralSettingsPane(settings: settings)
+        case .shortcuts:
+            ShortcutSettingsPane(settings: settings)
         case .appearance:
             AppearanceSettingsPane(settings: settings)
         case .languages:
@@ -229,6 +232,110 @@ private struct GeneralSettingsPane: View {
             }
         }
         .formStyle(.grouped)
+    }
+}
+
+private struct ShortcutSettingsPane: View {
+    @ObservedObject var settings: AppSettingsModel
+    @State private var isRecording = false
+    @State private var validationMessage: String?
+
+    var body: some View {
+        Form {
+            Section("划词翻译") {
+                Toggle("启用全局快捷键", isOn: $settings.selectionHotKeyEnabled)
+
+                HStack {
+                    Text("快捷键")
+                    Spacer()
+                    HotKeyRecorderButton(
+                        hotKey: settings.selectionHotKey,
+                        isRecording: $isRecording,
+                        validationMessage: $validationMessage
+                    ) { keyCode, modifiers in
+                        settings.setSelectionHotKey(keyCode: keyCode, modifiers: modifiers)
+                    }
+                }
+
+                Text(settings.selectionHotKeyStatusMessage)
+                    .font(.caption)
+                    .foregroundStyle(settings.selectionHotKeyHasConflict ? .red : .secondary)
+
+                if let validationMessage {
+                    Text(validationMessage)
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
+
+                Text("在任意 App 中选中文本后按设置的快捷键，VibeCopy 会读取选区并打开翻译岛。当前版本使用自动方向：中文转英文，非中文转简体中文。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .formStyle(.grouped)
+    }
+}
+
+private struct HotKeyRecorderButton: View {
+    let hotKey: HotKeyConfiguration
+    @Binding var isRecording: Bool
+    @Binding var validationMessage: String?
+    var onChange: (UInt32, UInt32) -> Void
+    @State private var localMonitor: Any?
+
+    var body: some View {
+        Button {
+            validationMessage = nil
+            isRecording = true
+            startRecording()
+        } label: {
+            Text(isRecording ? "按下新的快捷键..." : hotKey.displayName)
+                .font(.system(size: 15, weight: .semibold, design: .rounded))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background(Color.primary.opacity(isRecording ? 0.14 : 0.08), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .onChange(of: isRecording) { _, isRecording in
+            if !isRecording {
+                stopRecording()
+            }
+        }
+        .onDisappear {
+            stopRecording()
+        }
+    }
+
+    private func startRecording() {
+        stopRecording()
+        localMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            let modifiers = carbonModifiers(from: event.modifierFlags)
+            guard modifiers != 0 else {
+                validationMessage = "快捷键需要包含 Command、Option、Control 或 Shift。"
+                isRecording = false
+                return nil
+            }
+            validationMessage = nil
+            onChange(UInt32(event.keyCode), modifiers)
+            isRecording = false
+            return nil
+        }
+    }
+
+    private func stopRecording() {
+        if let localMonitor {
+            NSEvent.removeMonitor(localMonitor)
+            self.localMonitor = nil
+        }
+    }
+
+    private func carbonModifiers(from flags: NSEvent.ModifierFlags) -> UInt32 {
+        var modifiers: UInt32 = 0
+        if flags.contains(.command) { modifiers |= UInt32(NSEvent.ModifierFlags.command.rawValue) }
+        if flags.contains(.option) { modifiers |= UInt32(NSEvent.ModifierFlags.option.rawValue) }
+        if flags.contains(.control) { modifiers |= UInt32(NSEvent.ModifierFlags.control.rawValue) }
+        if flags.contains(.shift) { modifiers |= UInt32(NSEvent.ModifierFlags.shift.rawValue) }
+        return modifiers
     }
 }
 

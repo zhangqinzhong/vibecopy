@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -12,9 +13,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         showSettings: { [weak self] in self?.showSettings() }
     )
     private lazy var historyWindowController = ClipboardHistoryWindowController(monitor: clipboardMonitor)
-    private lazy var settingsWindowController = SettingsWindowController(settings: settingsModel)
+    private var settingsWindowController: SettingsWindowController!
+    private lazy var hotKeyManager = GlobalHotKeyManager { [weak self] in
+        self?.translateSelection()
+    }
     private var previewWindowController: SelectionTranslationWindowController?
     private var statusController: StatusBarController?
+    private var hotKeySettingsCancellable: AnyCancellable?
+    private var hotKeyConfigurationCancellable: AnyCancellable?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusController = StatusBarController(
@@ -27,6 +33,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
 
         clipboardMonitor.start()
+        settingsWindowController = SettingsWindowController(settings: settingsModel)
+        configureHotKeys()
     }
 
     private func startCapture() {
@@ -42,6 +50,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func translateSelection() {
         selectionTranslator.translateCurrentSelection()
+    }
+
+    private func configureHotKeys() {
+        updateSelectionHotKey()
+        hotKeySettingsCancellable = settingsModel.$selectionHotKeyEnabled
+            .sink { [weak self] isEnabled in
+                guard let self else { return }
+                let status = self.hotKeyManager.setEnabled(isEnabled, configuration: self.settingsModel.selectionHotKey)
+                self.settingsModel.updateSelectionHotKeyStatus(status)
+            }
+        hotKeyConfigurationCancellable = settingsModel.$selectionHotKey
+            .sink { [weak self] _ in
+                self?.updateSelectionHotKey()
+            }
+    }
+
+    private func updateSelectionHotKey() {
+        let status = hotKeyManager.setEnabled(settingsModel.selectionHotKeyEnabled, configuration: settingsModel.selectionHotKey)
+        settingsModel.updateSelectionHotKeyStatus(status)
     }
 
     private func showTranslationPreview() {

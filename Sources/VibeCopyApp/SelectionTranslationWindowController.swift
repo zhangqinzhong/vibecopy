@@ -87,8 +87,13 @@ final class SelectionTranslationWindowController: NSWindowController {
     }
 
     func showLoading(sourceText: String) {
+        showLoading(sourceText: sourceText, sourceLanguage: settings.sourceLanguageCode, targetLanguage: settings.targetLanguageCode)
+    }
+
+    func showLoading(sourceText: String, sourceLanguage: String, targetLanguage: String) {
         scheduledTranslation?.cancel()
-        resetDirectionFromDefaults()
+        currentSourceLanguage = sourceLanguage
+        currentTargetLanguage = targetLanguage
         lastSourceText = sourceText
         lastTranslatedText = ""
         syncModelFromCurrentDirection()

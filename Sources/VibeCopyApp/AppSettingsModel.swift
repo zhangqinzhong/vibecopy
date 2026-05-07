@@ -1,4 +1,5 @@
 import AppKit
+import Carbon
 import SwiftUI
 import Translation
 
@@ -78,12 +79,73 @@ struct TranslationLanguageStatus: Identifiable {
     var canDownload: Bool
 }
 
+struct HotKeyConfiguration: Equatable {
+    var keyCode: UInt32
+    var modifiers: UInt32
+
+    static let defaultSelection = HotKeyConfiguration(keyCode: UInt32(kVK_ANSI_D), modifiers: HotKeyModifier.option)
+
+    var displayName: String {
+        "\(modifierDisplayName)\(keyDisplayName)"
+    }
+
+    private var modifierDisplayName: String {
+        var parts = ""
+        if modifiers & HotKeyModifier.command != 0 { parts += "⌘" }
+        if modifiers & HotKeyModifier.option != 0 { parts += "⌥" }
+        if modifiers & HotKeyModifier.control != 0 { parts += "⌃" }
+        if modifiers & HotKeyModifier.shift != 0 { parts += "⇧" }
+        return parts
+    }
+
+    private var keyDisplayName: String {
+        Self.keyDisplayNames[keyCode] ?? "Key \(keyCode)"
+    }
+
+    private static let keyDisplayNames: [UInt32: String] = [
+        UInt32(kVK_ANSI_A): "A", UInt32(kVK_ANSI_B): "B", UInt32(kVK_ANSI_C): "C", UInt32(kVK_ANSI_D): "D",
+        UInt32(kVK_ANSI_E): "E", UInt32(kVK_ANSI_F): "F", UInt32(kVK_ANSI_G): "G", UInt32(kVK_ANSI_H): "H",
+        UInt32(kVK_ANSI_I): "I", UInt32(kVK_ANSI_J): "J", UInt32(kVK_ANSI_K): "K", UInt32(kVK_ANSI_L): "L",
+        UInt32(kVK_ANSI_M): "M", UInt32(kVK_ANSI_N): "N", UInt32(kVK_ANSI_O): "O", UInt32(kVK_ANSI_P): "P",
+        UInt32(kVK_ANSI_Q): "Q", UInt32(kVK_ANSI_R): "R", UInt32(kVK_ANSI_S): "S", UInt32(kVK_ANSI_T): "T",
+        UInt32(kVK_ANSI_U): "U", UInt32(kVK_ANSI_V): "V", UInt32(kVK_ANSI_W): "W", UInt32(kVK_ANSI_X): "X",
+        UInt32(kVK_ANSI_Y): "Y", UInt32(kVK_ANSI_Z): "Z",
+        UInt32(kVK_ANSI_0): "0", UInt32(kVK_ANSI_1): "1", UInt32(kVK_ANSI_2): "2", UInt32(kVK_ANSI_3): "3",
+        UInt32(kVK_ANSI_4): "4", UInt32(kVK_ANSI_5): "5", UInt32(kVK_ANSI_6): "6", UInt32(kVK_ANSI_7): "7",
+        UInt32(kVK_ANSI_8): "8", UInt32(kVK_ANSI_9): "9",
+        UInt32(kVK_Space): "Space", UInt32(kVK_Return): "Return", UInt32(kVK_Tab): "Tab",
+        UInt32(kVK_Escape): "Esc", UInt32(kVK_Delete): "Delete",
+        UInt32(kVK_F1): "F1", UInt32(kVK_F2): "F2", UInt32(kVK_F3): "F3", UInt32(kVK_F4): "F4",
+        UInt32(kVK_F5): "F5", UInt32(kVK_F6): "F6", UInt32(kVK_F7): "F7", UInt32(kVK_F8): "F8",
+        UInt32(kVK_F9): "F9", UInt32(kVK_F10): "F10", UInt32(kVK_F11): "F11", UInt32(kVK_F12): "F12"
+    ]
+}
+
+enum HotKeyModifier {
+    static let command = UInt32(NSEvent.ModifierFlags.command.rawValue)
+    static let option = UInt32(NSEvent.ModifierFlags.option.rawValue)
+    static let control = UInt32(NSEvent.ModifierFlags.control.rawValue)
+    static let shift = UInt32(NSEvent.ModifierFlags.shift.rawValue)
+
+    static func carbonModifiers(from modifiers: UInt32) -> UInt32 {
+        var carbon: UInt32 = 0
+        if modifiers & command != 0 { carbon |= UInt32(cmdKey) }
+        if modifiers & option != 0 { carbon |= UInt32(optionKey) }
+        if modifiers & control != 0 { carbon |= UInt32(controlKey) }
+        if modifiers & shift != 0 { carbon |= UInt32(shiftKey) }
+        return carbon
+    }
+}
+
 @MainActor
 final class AppSettingsModel: ObservableObject {
     private enum DefaultsKey {
         static let themePreference = "settings.themePreference"
         static let sourceLanguage = "settings.sourceLanguage"
         static let targetLanguage = "settings.targetLanguage"
+        static let selectionHotKeyEnabled = "settings.selectionHotKeyEnabled"
+        static let selectionHotKeyCode = "settings.selectionHotKeyCode"
+        static let selectionHotKeyModifiers = "settings.selectionHotKeyModifiers"
     }
 
     @Published var themePreference: AppThemePreference {
@@ -104,9 +166,24 @@ final class AppSettingsModel: ObservableObject {
         }
     }
 
+    @Published var selectionHotKeyEnabled: Bool {
+        didSet {
+            UserDefaults.standard.set(selectionHotKeyEnabled, forKey: DefaultsKey.selectionHotKeyEnabled)
+        }
+    }
+
+    @Published var selectionHotKey: HotKeyConfiguration {
+        didSet {
+            UserDefaults.standard.set(Int(selectionHotKey.keyCode), forKey: DefaultsKey.selectionHotKeyCode)
+            UserDefaults.standard.set(Int(selectionHotKey.modifiers), forKey: DefaultsKey.selectionHotKeyModifiers)
+        }
+    }
+
     @Published var supportedLanguages: [TranslationLanguageOption] = AppSettingsModel.fallbackLanguages
     @Published var languageStatuses: [TranslationLanguageStatus] = []
     @Published var languageStatusMessage = "语言状态会在打开设置时刷新。"
+    @Published var selectionHotKeyStatusMessage = "快捷键尚未注册。"
+    @Published var selectionHotKeyHasConflict = false
     @Published var isRefreshingLanguages = false
     @Published var isPreparingLanguagePack = false
 
@@ -122,6 +199,66 @@ final class AppSettingsModel: ObservableObject {
         sourceLanguageCode = Self.normalizedInitialSourceLanguage(savedSourceLanguage)
         let savedTargetLanguage = UserDefaults.standard.string(forKey: DefaultsKey.targetLanguage)
         targetLanguageCode = Self.normalizedInitialTargetLanguage(savedTargetLanguage)
+        selectionHotKeyEnabled = UserDefaults.standard.object(forKey: DefaultsKey.selectionHotKeyEnabled) as? Bool ?? true
+        selectionHotKey = HotKeyConfiguration(
+            keyCode: UInt32(UserDefaults.standard.object(forKey: DefaultsKey.selectionHotKeyCode) as? Int ?? Int(HotKeyConfiguration.defaultSelection.keyCode)),
+            modifiers: Self.normalizedHotKeyModifiers(
+                UInt32(UserDefaults.standard.object(forKey: DefaultsKey.selectionHotKeyModifiers) as? Int ?? Int(HotKeyConfiguration.defaultSelection.modifiers))
+            )
+        )
+    }
+
+    func setSelectionHotKey(keyCode: UInt32, modifiers: UInt32) {
+        selectionHotKey = HotKeyConfiguration(keyCode: keyCode, modifiers: modifiers)
+    }
+
+    private static func normalizedHotKeyModifiers(_ modifiers: UInt32) -> UInt32 {
+        if modifiers & UInt32(cmdKey) != 0 ||
+            modifiers & UInt32(optionKey) != 0 ||
+            modifiers & UInt32(controlKey) != 0 ||
+            modifiers & UInt32(shiftKey) != 0 {
+            var normalized: UInt32 = 0
+            if modifiers & UInt32(cmdKey) != 0 { normalized |= HotKeyModifier.command }
+            if modifiers & UInt32(optionKey) != 0 { normalized |= HotKeyModifier.option }
+            if modifiers & UInt32(controlKey) != 0 { normalized |= HotKeyModifier.control }
+            if modifiers & UInt32(shiftKey) != 0 { normalized |= HotKeyModifier.shift }
+            return normalized
+        }
+
+        let carbonCommand = UInt32(cmdKey >> 8)
+        let carbonOption = UInt32(optionKey >> 8)
+        let carbonControl = UInt32(controlKey >> 8)
+        let carbonShift = UInt32(shiftKey >> 8)
+        if modifiers & carbonCommand != 0 ||
+            modifiers & carbonOption != 0 ||
+            modifiers & carbonControl != 0 ||
+            modifiers & carbonShift != 0 {
+            var normalized: UInt32 = 0
+            if modifiers & carbonCommand != 0 { normalized |= HotKeyModifier.command }
+            if modifiers & carbonOption != 0 { normalized |= HotKeyModifier.option }
+            if modifiers & carbonControl != 0 { normalized |= HotKeyModifier.control }
+            if modifiers & carbonShift != 0 { normalized |= HotKeyModifier.shift }
+            return normalized
+        }
+
+        var normalized = modifiers
+        let known = HotKeyModifier.command | HotKeyModifier.option | HotKeyModifier.control | HotKeyModifier.shift
+        normalized &= known
+        return normalized
+    }
+
+    func updateSelectionHotKeyStatus(_ status: OSStatus) {
+        switch status {
+        case noErr:
+            selectionHotKeyHasConflict = false
+            selectionHotKeyStatusMessage = selectionHotKeyEnabled ? "快捷键已注册。" : "快捷键已关闭。"
+        case OSStatus(eventHotKeyExistsErr):
+            selectionHotKeyHasConflict = true
+            selectionHotKeyStatusMessage = "快捷键冲突：这个组合已被系统或其他 App 占用。"
+        default:
+            selectionHotKeyHasConflict = true
+            selectionHotKeyStatusMessage = "快捷键注册失败（OSStatus \(status)）。"
+        }
     }
 
     func refreshSupportedLanguages() {

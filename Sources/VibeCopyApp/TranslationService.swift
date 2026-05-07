@@ -36,9 +36,9 @@ final class TranslationService: @unchecked Sendable {
             return
         }
 
-        let detectedSource = Self.containsChinese(trimmed) ? "zh-Hans" : "en-US"
-        let sourceLang = Locale.Language(identifier: sourceLanguage.map(Self.toLocaleIdentifier) ?? detectedSource)
-        let targetLang = Locale.Language(identifier: targetLanguage.map(Self.toLocaleIdentifier) ?? (detectedSource == "zh-Hans" ? "en-US" : "zh-Hans"))
+        let detectedDirection = TranslationLanguageDetector.automaticDirection(for: trimmed)
+        let sourceLang = Locale.Language(identifier: sourceLanguage.map(Self.toLocaleIdentifier) ?? detectedDirection.source)
+        let targetLang = Locale.Language(identifier: targetLanguage.map(Self.toLocaleIdentifier) ?? detectedDirection.target)
 
         Task { @MainActor in
             let availability = LanguageAvailability()
@@ -78,13 +78,6 @@ final class TranslationService: @unchecked Sendable {
         case "en_US": return "en-US"
         case "ja_JP": return "ja-JP"
         default: return code.replacingOccurrences(of: "_", with: "-")
-        }
-    }
-
-    private static func containsChinese(_ text: String) -> Bool {
-        text.unicodeScalars.contains { scalar in
-            (0x4E00...0x9FFF).contains(Int(scalar.value)) ||
-            (0x3400...0x4DBF).contains(Int(scalar.value))
         }
     }
 

@@ -25,13 +25,16 @@ final class SelectionTranslator {
             guard let self else { return }
             guard generation == self.translationGeneration else { return }
 
-            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            let trimmed = SelectionTextNormalizer.trim(text)
             if trimmed.isEmpty {
                 self.showFailure()
                 return
             }
 
-            let direction = Self.automaticDirection(for: trimmed)
+            let direction = TranslationLanguageDetector.automaticDirection(
+                for: trimmed,
+                supportedLanguages: self.settings.supportedLanguages
+            )
             self.showLoading(sourceText: trimmed, sourceLanguage: direction.source, targetLanguage: direction.target)
             self.translationService.translate(
                 trimmed,
@@ -47,7 +50,6 @@ final class SelectionTranslator {
     }
 
     private func showLoading(sourceText: String, sourceLanguage: String, targetLanguage: String) {
-        NSApp.activate(ignoringOtherApps: true)
         let controller = makeOrReuseWindowController()
         controller.showLoading(
             sourceText: sourceText,
@@ -57,7 +59,6 @@ final class SelectionTranslator {
     }
 
     private func showFailure() {
-        NSApp.activate(ignoringOtherApps: true)
         let controller = makeOrReuseWindowController()
         controller.showNoSelection()
     }
@@ -76,16 +77,19 @@ final class SelectionTranslator {
         return controller
     }
 
-    private static func automaticDirection(for text: String) -> (source: String, target: String) {
-        containsChinese(text) ? ("zh-Hans", "en-US") : ("en-US", "zh-Hans")
+}
+
+private enum SelectionTextNormalizer {
+    static func trim(_ text: String) -> String {
+        text.trimmingCharacters(in: boundaryCharacters)
     }
 
-    private static func containsChinese(_ text: String) -> Bool {
-        text.unicodeScalars.contains { scalar in
-            (0x4E00...0x9FFF).contains(Int(scalar.value)) ||
-                (0x3400...0x4DBF).contains(Int(scalar.value))
-        }
-    }
+    private static let boundaryCharacters: CharacterSet = {
+        var characters = CharacterSet.whitespacesAndNewlines
+        characters.formUnion(.controlCharacters)
+        characters.insert(charactersIn: "\u{200B}\u{200C}\u{200D}\u{2060}\u{FEFF}")
+        return characters
+    }()
 }
 
 private final class SelectedTextReader {

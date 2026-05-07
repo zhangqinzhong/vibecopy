@@ -364,7 +364,6 @@ final class SelectionTranslationWindowController: NSWindowController {
             }
             window.alphaValue = 1
             window.orderFrontRegardless()
-            window.makeKey()
             startInteractionMonitoring()
 
             DispatchQueue.main.async { [weak self] in
@@ -380,7 +379,6 @@ final class SelectionTranslationWindowController: NSWindowController {
                 islandModel.phase = .opened
             }
             window.orderFrontRegardless()
-            window.makeKey()
             startInteractionMonitoring()
         }
     }
@@ -796,65 +794,77 @@ private struct TranslationIslandContent: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
+        ZStack(alignment: .top) {
+            VStack(spacing: 0) {
+                Color.clear
+                    .frame(height: 34)
+
+                TranslationPane(
+                    language: settings.languageLabel(for: model.sourceLanguage),
+                    languageColor: palette.ink,
+                    text: sourceBinding,
+                    placeholder: "输入文本",
+                    isSource: true,
+                    mode: model.mode,
+                    palette: palette,
+                    languageOptions: settings.supportedLanguages,
+                    selectedLanguageCode: model.sourceLanguage,
+                    selectLanguage: actions.selectSourceLanguage,
+                    textAreaHeight: 58,
+                    actions: [
+                        TranslationActionButton(systemName: "speaker.wave.2", action: actions.speakSource),
+                        TranslationActionButton(systemName: "doc.on.doc", action: actions.copySource)
+                    ]
+                )
+                .frame(height: 112)
+                .padding(.top, 2)
+
+                divider
+                    .frame(height: 36)
+
+                TranslationPane(
+                    language: settings.languageLabel(for: model.targetLanguage),
+                    languageColor: palette.cyan,
+                    text: .constant(resultText),
+                    placeholder: "Enter text",
+                    isSource: false,
+                    mode: model.mode,
+                    palette: palette,
+                    languageOptions: settings.supportedLanguages,
+                    selectedLanguageCode: model.targetLanguage,
+                    selectLanguage: actions.selectTargetLanguage,
+                    textAreaHeight: 62,
+                    actions: [
+                        TranslationActionButton(systemName: "speaker.wave.2", action: actions.speakResult),
+                        TranslationActionButton(systemName: "doc.on.doc", action: actions.copyResult),
+                        TranslationActionButton(text: "Aa", action: actions.copyCamel),
+                        TranslationActionButton(systemName: "minus.square", action: actions.copySnake)
+                    ]
+                )
+                .frame(height: 116)
+                .padding(.top, 2)
+            }
+
             toolbar
-                .frame(height: 30)
-                .padding(.top, 10)
-
-            TranslationPane(
-                language: settings.languageLabel(for: model.sourceLanguage),
-                languageColor: palette.ink,
-                text: sourceBinding,
-                placeholder: "输入文本",
-                isSource: true,
-                mode: model.mode,
-                palette: palette,
-                languageOptions: settings.supportedLanguages,
-                selectedLanguageCode: model.sourceLanguage,
-                selectLanguage: actions.selectSourceLanguage,
-                actions: [
-                    TranslationActionButton(systemName: "speaker.wave.2", action: actions.speakSource),
-                    TranslationActionButton(systemName: "doc.on.doc", action: actions.copySource)
-                ]
-            )
-            .frame(height: 118)
-            .padding(.top, 8)
-
-            divider
-                .frame(height: 46)
-
-            TranslationPane(
-                language: settings.languageLabel(for: model.targetLanguage),
-                languageColor: palette.cyan,
-                text: .constant(resultText),
-                placeholder: "Enter text",
-                isSource: false,
-                mode: model.mode,
-                palette: palette,
-                languageOptions: settings.supportedLanguages,
-                selectedLanguageCode: model.targetLanguage,
-                selectLanguage: actions.selectTargetLanguage,
-                actions: [
-                    TranslationActionButton(systemName: "speaker.wave.2", action: actions.speakResult),
-                    TranslationActionButton(systemName: "doc.on.doc", action: actions.copyResult),
-                    TranslationActionButton(text: "Aa", action: actions.copyCamel),
-                    TranslationActionButton(systemName: "minus.square", action: actions.copySnake)
-                ]
-            )
-            .frame(height: 122)
-            .padding(.top, 4)
+                .frame(height: 28)
+                .scaleEffect(0.9)
+                .offset(y: -22)
         }
         .padding(.horizontal, 24)
-        .padding(.bottom, 14)
+        .padding(.bottom, 12)
     }
 
     private var toolbar: some View {
         HStack(spacing: 18) {
             TranslationActionButton(systemName: "pin", isActive: model.isPinned, action: actions.togglePin)
+                .offset(x: -28)
             Spacer()
-            TranslationActionButton(systemName: "star", action: {})
-            TranslationActionButton(systemName: "viewfinder", action: {})
-            TranslationActionButton(systemName: "gearshape", action: actions.showSettings)
+            HStack(spacing: 18) {
+                TranslationActionButton(systemName: "star", action: {})
+                TranslationActionButton(systemName: "viewfinder", action: {})
+                TranslationActionButton(systemName: "gearshape", action: actions.showSettings)
+            }
+            .offset(x: 28)
         }
     }
 
@@ -916,10 +926,11 @@ private struct TranslationPane: View {
     let languageOptions: [TranslationLanguageOption]
     let selectedLanguageCode: String
     let selectLanguage: (TranslationLanguageOption) -> Void
+    let textAreaHeight: CGFloat
     let actions: [TranslationActionButton]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 7) {
             Menu {
                 ForEach(languageOptions) { option in
                     Button {
@@ -935,7 +946,7 @@ private struct TranslationPane: View {
             } label: {
                 HStack(spacing: 6) {
                     Text(language)
-                        .font(.system(size: 19, weight: .bold))
+                        .font(.system(size: 18, weight: .bold))
                     Image(systemName: "chevron.down")
                         .font(.system(size: 10, weight: .semibold))
                 }
@@ -952,20 +963,20 @@ private struct TranslationPane: View {
                             .foregroundStyle(palette.placeholder)
                             .allowsHitTesting(false)
                     }
-                    BoundedTextInput(text: $text, fontSize: 38, palette: palette)
+                    BoundedTextInput(text: $text, fontSize: displayFontSize, palette: palette)
                         .frame(maxWidth: .infinity)
-                        .frame(height: 50)
+                        .frame(height: textAreaHeight)
                         .clipped()
                 } else {
-                    Text(displayText)
-                        .font(.system(size: text.isEmpty ? 38 : 34, weight: .bold))
-                        .foregroundStyle(text.isEmpty ? palette.cyan.opacity(0.3) : palette.ink.opacity(mode == .loading ? 0.48 : 0.9))
-                        .lineLimit(2)
-                        .minimumScaleFactor(0.72)
+                    TranslationTextDisplay(
+                        text: displayText,
+                        fontSize: displayFontSize,
+                        foregroundColor: text.isEmpty ? palette.cyan.opacity(0.3) : palette.ink.opacity(mode == .loading ? 0.48 : 0.9)
+                    )
                 }
             }
             .frame(maxWidth: .infinity, alignment: .topLeading)
-            .frame(height: 50, alignment: .topLeading)
+            .frame(height: textAreaHeight, alignment: .topLeading)
             .clipped()
 
             HStack(spacing: 20) {
@@ -973,11 +984,39 @@ private struct TranslationPane: View {
                     actions[index]
                 }
             }
+            .frame(height: 28, alignment: .center)
         }
     }
 
     private var displayText: String {
         text.isEmpty ? placeholder : text
+    }
+
+    private var displayFontSize: CGFloat {
+        if text.isEmpty { return 38 }
+        if text.count > 120 { return 21 }
+        if text.count > 56 { return 26 }
+        return isSource ? 32 : 31
+    }
+}
+
+private struct TranslationTextDisplay: View {
+    let text: String
+    let fontSize: CGFloat
+    let foregroundColor: Color
+
+    var body: some View {
+        ScrollView(.vertical, showsIndicators: true) {
+            Text(text)
+                .font(.system(size: fontSize, weight: .bold))
+                .foregroundStyle(foregroundColor)
+                .multilineTextAlignment(.leading)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .padding(.trailing, 6)
+        }
+        .environment(\.layoutDirection, .leftToRight)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 }
 
@@ -1104,7 +1143,7 @@ private struct BoundedTextInput: NSViewRepresentable {
         let scrollView = NSScrollView()
         scrollView.drawsBackground = false
         scrollView.borderType = .noBorder
-        scrollView.hasVerticalScroller = false
+        scrollView.hasVerticalScroller = true
         scrollView.hasHorizontalScroller = false
         scrollView.autohidesScrollers = true
         scrollView.scrollerStyle = .overlay
@@ -1125,11 +1164,12 @@ private struct BoundedTextInput: NSViewRepresentable {
         textView.textContainer?.lineFragmentPadding = 0
         textView.textContainer?.widthTracksTextView = true
         textView.textContainer?.heightTracksTextView = false
-        textView.textContainer?.maximumNumberOfLines = 2
+        textView.textContainer?.maximumNumberOfLines = 0
         textView.font = .systemFont(ofSize: fontSize, weight: .bold)
         textView.textColor = NSColor(palette.ink)
-        textView.insertionPointColor = NSColor(palette.ink)
+        textView.insertionPointColor = .clear
         textView.string = text
+        Self.applyLeftToRightParagraphLayout(to: textView, fontSize: fontSize)
 
         scrollView.documentView = textView
         context.coordinator.textView = textView
@@ -1143,17 +1183,44 @@ private struct BoundedTextInput: NSViewRepresentable {
         }
         textView.font = .systemFont(ofSize: fontSize, weight: .bold)
         textView.textColor = NSColor(palette.ink)
-        textView.insertionPointColor = NSColor(palette.ink)
+        textView.insertionPointColor = context.coordinator.isEditing ? NSColor(palette.ink) : .clear
         textView.textContainer?.containerSize = NSSize(
             width: max(0, scrollView.contentSize.width),
             height: CGFloat.greatestFiniteMagnitude
         )
+        Self.applyLeftToRightParagraphLayout(to: textView, fontSize: fontSize)
+    }
+
+    private static func applyLeftToRightParagraphLayout(to textView: NSTextView, fontSize: CGFloat) {
+        let paragraphStyle = NSMutableParagraphStyle()
+        paragraphStyle.alignment = .left
+        paragraphStyle.baseWritingDirection = .leftToRight
+        paragraphStyle.lineBreakMode = .byWordWrapping
+
+        let font = NSFont.systemFont(ofSize: fontSize, weight: .bold)
+        textView.baseWritingDirection = .leftToRight
+        textView.alignment = .left
+        textView.defaultParagraphStyle = paragraphStyle
+        textView.typingAttributes = [
+            .font: font,
+            .paragraphStyle: paragraphStyle,
+            .foregroundColor: textView.textColor ?? NSColor.labelColor
+        ]
+
+        let fullRange = NSRange(location: 0, length: textView.string.utf16.count)
+        guard fullRange.length > 0 else { return }
+        textView.textStorage?.addAttributes([
+            .paragraphStyle: paragraphStyle,
+            .font: font,
+            .foregroundColor: textView.textColor ?? NSColor.labelColor
+        ], range: fullRange)
     }
 
     final class Coordinator: NSObject, NSTextViewDelegate {
         @Binding var text: String
         weak var textView: NSTextView?
         var isEditingMarkedText = false
+        var isEditing = false
 
         init(text: Binding<String>) {
             _text = text
@@ -1166,9 +1233,18 @@ private struct BoundedTextInput: NSViewRepresentable {
             text = textView.string
         }
 
+        func textDidBeginEditing(_ notification: Notification) {
+            isEditing = true
+            if let textView = notification.object as? NSTextView {
+                textView.insertionPointColor = textView.textColor ?? .labelColor
+            }
+        }
+
         func textDidEndEditing(_ notification: Notification) {
             isEditingMarkedText = false
+            isEditing = false
             if let textView = notification.object as? NSTextView {
+                textView.insertionPointColor = .clear
                 text = textView.string
             }
         }

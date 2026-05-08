@@ -95,6 +95,7 @@ private enum SelectionTextNormalizer {
 private final class SelectedTextReader {
     private let copyTimeout: TimeInterval = 0.8
     private let pollInterval: TimeInterval = 0.05
+    private let modifierReleaseTimeout: TimeInterval = 0.6
 
     func readSelectedText(completion: @escaping (String) -> Void) {
         if let selectedText = readAccessibilitySelectedText() {
@@ -103,6 +104,12 @@ private final class SelectedTextReader {
             return
         }
 
+        waitForHotKeyModifiersToClear(deadline: Date().addingTimeInterval(modifierReleaseTimeout)) {
+            self.readSelectedTextFromPasteboard(completion: completion)
+        }
+    }
+
+    private func readSelectedTextFromPasteboard(completion: @escaping (String) -> Void) {
         let pasteboard = NSPasteboard.general
         let oldChangeCount = pasteboard.changeCount
         let oldItems = pasteboard.pasteboardItems?.map { item -> [NSPasteboard.PasteboardType: Data] in
@@ -123,6 +130,21 @@ private final class SelectedTextReader {
             deadline: Date().addingTimeInterval(copyTimeout),
             completion: completion
         )
+    }
+
+    private func waitForHotKeyModifiersToClear(deadline: Date, completion: @escaping () -> Void) {
+        let activeModifiers = CGEventSource.flagsState(.hidSystemState).intersection(Self.hotKeyModifierFlags)
+        guard !activeModifiers.isEmpty, Date() < deadline else {
+            if !activeModifiers.isEmpty {
+                NSLog("VibeCopy selected text copy started while modifiers are still pressed")
+            }
+            completion()
+            return
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + pollInterval) {
+            self.waitForHotKeyModifiersToClear(deadline: deadline, completion: completion)
+        }
     }
 
     private func pollPasteboard(
@@ -210,4 +232,11 @@ private final class SelectedTextReader {
             pasteboard.writeObjects([item])
         }
     }
+
+    private static let hotKeyModifierFlags: CGEventFlags = [
+        .maskCommand,
+        .maskAlternate,
+        .maskControl,
+        .maskShift
+    ]
 }

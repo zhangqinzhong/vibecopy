@@ -28,6 +28,7 @@ final class SelectionTranslationWindowController: NSWindowController {
     private var transitionGeneration = 0
     private var scheduledTranslation: DispatchWorkItem?
     private var themeCancellable: AnyCancellable?
+    private var hasPointerEnteredOpenedIsland = false
     private let speechSynthesizer = AVSpeechSynthesizer()
 
     var isIslandVisible: Bool {
@@ -159,6 +160,7 @@ final class SelectionTranslationWindowController: NSWindowController {
 
         let actions = TranslationIslandActions(
             sourceTextChanged: { [weak self] text in self?.sourceTextChanged(text) },
+            submitSourceText: { [weak self] in self?.submitSourceText() },
             copySource: { [weak self] in self?.copy(self?.lastSourceText ?? "") },
             copyResult: { [weak self] in
                 guard let self else { return }
@@ -222,21 +224,23 @@ final class SelectionTranslationWindowController: NSWindowController {
         lastSourceText = text
         islandModel.sourceText = text
         scheduledTranslation?.cancel()
+        manualTranslationGeneration &+= 1
 
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
-            manualTranslationGeneration &+= 1
             lastTranslatedText = ""
             islandModel.mode = .empty
             islandModel.translatedText = ""
             return
         }
 
-        let workItem = DispatchWorkItem { [weak self] in
-            self?.translateTypedText(text, sourceLanguage: self?.sourceLanguage, targetLanguage: self?.targetLanguage)
-        }
-        scheduledTranslation = workItem
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.65, execute: workItem)
+        lastTranslatedText = ""
+        islandModel.mode = .empty
+        islandModel.translatedText = ""
+    }
+
+    private func submitSourceText() {
+        translateTypedText(lastSourceText, sourceLanguage: sourceLanguage, targetLanguage: targetLanguage)
     }
 
     private func translateTypedText(_ text: String, sourceLanguage: String?, targetLanguage: String?) {
@@ -277,11 +281,11 @@ final class SelectionTranslationWindowController: NSWindowController {
         ) { [weak self] result in
             DispatchQueue.main.async {
                 guard let self, self.manualTranslationGeneration == generation else { return }
-                self.lastSourceText = result.sourceText
+                self.lastSourceText = text
                 self.lastTranslatedText = result.translatedText
                 self.render(
                     mode: .result,
-                    sourceText: self.lastSourceText,
+                    sourceText: text,
                     translatedText: result.translatedText,
                     sourceLanguage: self.sourceLanguage,
                     targetLanguage: self.targetLanguage
@@ -291,9 +295,27 @@ final class SelectionTranslationWindowController: NSWindowController {
     }
 
     private func swapLanguages() {
+        let previousSourceText = lastSourceText
+        let previousTranslatedText = lastTranslatedText
         swap(&currentSourceLanguage, &currentTargetLanguage)
         syncModelFromCurrentDirection()
-        translateTypedText(lastSourceText, sourceLanguage: sourceLanguage, targetLanguage: targetLanguage)
+
+        guard !previousTranslatedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            translateTypedText(previousSourceText, sourceLanguage: sourceLanguage, targetLanguage: targetLanguage)
+            return
+        }
+
+        scheduledTranslation?.cancel()
+        manualTranslationGeneration &+= 1
+        lastSourceText = previousTranslatedText
+        lastTranslatedText = previousSourceText
+        render(
+            mode: .result,
+            sourceText: previousTranslatedText,
+            translatedText: previousSourceText,
+            sourceLanguage: sourceLanguage,
+            targetLanguage: targetLanguage
+        )
     }
 
     private func selectSourceLanguage(_ option: TranslationLanguageOption) {
@@ -354,6 +376,7 @@ final class SelectionTranslationWindowController: NSWindowController {
         let shouldAnimateOpen = isFirstOpen || islandModel.phase == .closed
         transitionGeneration &+= 1
         let generation = transitionGeneration
+        hasPointerEnteredOpenedIsland = openedIslandRect().contains(NSEvent.mouseLocation)
         islandModel.closedSize = Self.closedIslandSize(for: Self.targetScreen())
         window.setFrame(finalFrame, display: false)
         window.ignoresMouseEvents = false
@@ -463,7 +486,12 @@ final class SelectionTranslationWindowController: NSWindowController {
             return
         }
 
-        if islandModel.phase == .opened, !openedIslandRect().contains(screenPoint) {
+        if islandModel.phase == .opened, openedIslandRect().contains(screenPoint) {
+            hasPointerEnteredOpenedIsland = true
+            return
+        }
+
+        if islandModel.phase == .opened, hasPointerEnteredOpenedIsland {
             dismissIsland()
         }
     }
@@ -638,6 +666,7 @@ private final class TranslationIslandModel: ObservableObject {
 
 private struct TranslationIslandActions {
     var sourceTextChanged: (String) -> Void
+    var submitSourceText: () -> Void
     var copySource: () -> Void
     var copyResult: () -> Void
     var copyCamel: () -> Void
@@ -811,6 +840,7 @@ private struct TranslationIslandContent: View {
                     selectedLanguageCode: model.sourceLanguage,
                     selectLanguage: actions.selectSourceLanguage,
                     textAreaHeight: 58,
+                    submitAction: actions.submitSourceText,
                     actions: [
                         TranslationActionButton(systemName: "speaker.wave.2", action: actions.speakSource),
                         TranslationActionButton(systemName: "doc.on.doc", action: actions.copySource)
@@ -834,6 +864,7 @@ private struct TranslationIslandContent: View {
                     selectedLanguageCode: model.targetLanguage,
                     selectLanguage: actions.selectTargetLanguage,
                     textAreaHeight: 62,
+                    submitAction: nil,
                     actions: [
                         TranslationActionButton(systemName: "speaker.wave.2", action: actions.speakResult),
                         TranslationActionButton(systemName: "doc.on.doc", action: actions.copyResult),
@@ -927,7 +958,9 @@ private struct TranslationPane: View {
     let selectedLanguageCode: String
     let selectLanguage: (TranslationLanguageOption) -> Void
     let textAreaHeight: CGFloat
+    let submitAction: (() -> Void)?
     let actions: [TranslationActionButton]
+    @State private var isEditingSourceText = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
@@ -957,16 +990,35 @@ private struct TranslationPane: View {
 
             ZStack(alignment: .topLeading) {
                 if isSource {
-                    if text.isEmpty {
+                    if text.isEmpty && !isEditingSourceText {
                         Text(placeholder)
                             .font(.system(size: 38, weight: .bold))
                             .foregroundStyle(palette.placeholder)
                             .allowsHitTesting(false)
                     }
-                    BoundedTextInput(text: $text, fontSize: displayFontSize, palette: palette)
+                    BoundedTextInput(
+                        text: $text,
+                        isEditing: $isEditingSourceText,
+                        fontSize: displayFontSize,
+                        palette: palette,
+                        onSubmit: { submitAction?() }
+                    )
                         .frame(maxWidth: .infinity)
                         .frame(height: textAreaHeight)
+                        .padding(.trailing, showsSubmitButton ? 56 : 0)
                         .clipped()
+
+                    if showsSubmitButton, let submitAction {
+                        TranslationSubmitButton(
+                            isLoading: mode == .loading,
+                            palette: palette,
+                            action: submitAction
+                        )
+                        .disabled(mode == .loading)
+                        .transition(.scale(scale: 0.92).combined(with: .opacity))
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                        .padding(.top, 4)
+                    }
                 } else {
                     TranslationTextDisplay(
                         text: displayText,
@@ -997,6 +1049,94 @@ private struct TranslationPane: View {
         if text.count > 120 { return 21 }
         if text.count > 56 { return 26 }
         return isSource ? 32 : 31
+    }
+
+    private var showsSubmitButton: Bool {
+        isSource && !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+}
+
+private struct TranslationSubmitButton: View {
+    let isLoading: Bool
+    let palette: TranslationPalette
+    let action: () -> Void
+    @State private var isAcknowledging = false
+
+    var body: some View {
+        Button {
+            action()
+            withAnimation(.easeOut(duration: 0.08)) {
+                isAcknowledging = true
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.16) {
+                withAnimation(.easeOut(duration: 0.14)) {
+                    isAcknowledging = false
+                }
+            }
+        } label: {
+            ZStack {
+                if isAcknowledging {
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(palette.cyan.opacity(0.16))
+                        .frame(width: 38, height: 38)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                .stroke(palette.cyan.opacity(0.35), lineWidth: 1)
+                        )
+                }
+
+                TranslationSubmitGlyph(isLoading: isLoading, palette: palette)
+            }
+            .frame(width: 42, height: 42)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(TranslationActionButtonStyle())
+    }
+}
+
+private struct TranslationSubmitGlyph: View {
+    let isLoading: Bool
+    let palette: TranslationPalette
+
+    var body: some View {
+        ZStack {
+            if isLoading {
+                ProgressView()
+                    .controlSize(.small)
+                    .tint(palette.muted.opacity(0.65))
+            } else {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .stroke(palette.cyan, lineWidth: 2.3)
+                        .frame(width: 22, height: 24)
+                        .offset(x: 5, y: 3)
+
+                    UnevenRoundedRectangle(
+                        topLeadingRadius: 5,
+                        bottomLeadingRadius: 5,
+                        bottomTrailingRadius: 1.5,
+                        topTrailingRadius: 1.5,
+                        style: .continuous
+                    )
+                    .fill(palette.cyan)
+                    .frame(width: 19, height: 25)
+                    .rotationEffect(.degrees(-6))
+                    .offset(x: -5, y: -2)
+
+                    Text("En")
+                        .font(.system(size: 9.5, weight: .heavy, design: .rounded))
+                        .foregroundStyle(.white)
+                        .offset(x: -6, y: -3)
+
+                    Text("文")
+                        .font(.system(size: 15, weight: .heavy, design: .rounded))
+                        .foregroundStyle(palette.cyan)
+                        .offset(x: 8, y: 6)
+                }
+                .frame(width: 34, height: 34)
+            }
+        }
+        .frame(width: 42, height: 42)
     }
 }
 
@@ -1132,11 +1272,13 @@ private struct TranslationDividerLine: View {
 
 private struct BoundedTextInput: NSViewRepresentable {
     @Binding var text: String
+    @Binding var isEditing: Bool
     let fontSize: CGFloat
     let palette: TranslationPalette
+    let onSubmit: () -> Void
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(text: $text)
+        Coordinator(text: $text, isEditing: $isEditing, onSubmit: onSubmit)
     }
 
     func makeNSView(context: Context) -> NSScrollView {
@@ -1218,12 +1360,16 @@ private struct BoundedTextInput: NSViewRepresentable {
 
     final class Coordinator: NSObject, NSTextViewDelegate {
         @Binding var text: String
+        @Binding var isEditingBinding: Bool
         weak var textView: NSTextView?
         var isEditingMarkedText = false
         var isEditing = false
+        let onSubmit: () -> Void
 
-        init(text: Binding<String>) {
+        init(text: Binding<String>, isEditing: Binding<Bool>, onSubmit: @escaping () -> Void) {
             _text = text
+            _isEditingBinding = isEditing
+            self.onSubmit = onSubmit
         }
 
         func textDidChange(_ notification: Notification) {
@@ -1235,6 +1381,7 @@ private struct BoundedTextInput: NSViewRepresentable {
 
         func textDidBeginEditing(_ notification: Notification) {
             isEditing = true
+            isEditingBinding = true
             if let textView = notification.object as? NSTextView {
                 textView.insertionPointColor = textView.textColor ?? .labelColor
             }
@@ -1243,10 +1390,27 @@ private struct BoundedTextInput: NSViewRepresentable {
         func textDidEndEditing(_ notification: Notification) {
             isEditingMarkedText = false
             isEditing = false
+            isEditingBinding = false
             if let textView = notification.object as? NSTextView {
                 textView.insertionPointColor = .clear
                 text = textView.string
             }
+        }
+
+        func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            if commandSelector == #selector(NSResponder.insertNewline(_:)) {
+                guard !textView.hasMarkedText() else { return false }
+                text = textView.string
+                onSubmit()
+                return true
+            }
+
+            if commandSelector == #selector(NSResponder.insertNewlineIgnoringFieldEditor(_:)) {
+                textView.insertText("\n", replacementRange: textView.selectedRange())
+                return true
+            }
+
+            return false
         }
     }
 }

@@ -992,7 +992,7 @@ private struct TranslationPane: View {
                 if isSource {
                     if text.isEmpty && !isEditingSourceText {
                         Text(placeholder)
-                            .font(.system(size: 38, weight: .bold))
+                            .font(.system(size: displayFontSize, weight: .bold))
                             .foregroundStyle(palette.placeholder)
                             .allowsHitTesting(false)
                     }
@@ -1045,7 +1045,7 @@ private struct TranslationPane: View {
     }
 
     private var displayFontSize: CGFloat {
-        if text.isEmpty { return 38 }
+        if text.isEmpty { return isSource ? 32 : 31 }
         if text.count > 120 { return 21 }
         if text.count > 56 { return 26 }
         return isSource ? 32 : 31
@@ -1309,7 +1309,7 @@ private struct BoundedTextInput: NSViewRepresentable {
         textView.textContainer?.maximumNumberOfLines = 0
         textView.font = .systemFont(ofSize: fontSize, weight: .bold)
         textView.textColor = NSColor(palette.ink)
-        textView.insertionPointColor = .clear
+        textView.insertionPointColor = NSColor(palette.ink)
         textView.string = text
         Self.applyLeftToRightParagraphLayout(to: textView, fontSize: fontSize)
 
@@ -1323,9 +1323,13 @@ private struct BoundedTextInput: NSViewRepresentable {
         if textView.string != text, !context.coordinator.isEditingMarkedText {
             textView.string = text
         }
+        let isFirstResponder = textView.window?.firstResponder === textView
+        if isFirstResponder {
+            context.coordinator.beginEditing(textView)
+        }
         textView.font = .systemFont(ofSize: fontSize, weight: .bold)
         textView.textColor = NSColor(palette.ink)
-        textView.insertionPointColor = context.coordinator.isEditing ? NSColor(palette.ink) : .clear
+        textView.insertionPointColor = NSColor(palette.ink)
         textView.textContainer?.containerSize = NSSize(
             width: max(0, scrollView.contentSize.width),
             height: CGFloat.greatestFiniteMagnitude
@@ -1374,16 +1378,15 @@ private struct BoundedTextInput: NSViewRepresentable {
 
         func textDidChange(_ notification: Notification) {
             guard let textView = notification.object as? NSTextView else { return }
+            beginEditing(textView)
             isEditingMarkedText = textView.hasMarkedText()
             guard !isEditingMarkedText else { return }
             text = textView.string
         }
 
         func textDidBeginEditing(_ notification: Notification) {
-            isEditing = true
-            isEditingBinding = true
             if let textView = notification.object as? NSTextView {
-                textView.insertionPointColor = textView.textColor ?? .labelColor
+                beginEditing(textView)
             }
         }
 
@@ -1392,12 +1395,25 @@ private struct BoundedTextInput: NSViewRepresentable {
             isEditing = false
             isEditingBinding = false
             if let textView = notification.object as? NSTextView {
-                textView.insertionPointColor = .clear
+                textView.insertionPointColor = textView.textColor ?? .labelColor
                 text = textView.string
             }
         }
 
+        func textViewDidChangeSelection(_ notification: Notification) {
+            if let textView = notification.object as? NSTextView,
+               textView.window?.firstResponder === textView {
+                beginEditing(textView)
+            }
+        }
+
+        func textView(_ textView: NSTextView, shouldChangeTextIn affectedCharRange: NSRange, replacementString: String?) -> Bool {
+            beginEditing(textView)
+            return true
+        }
+
         func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            beginEditing(textView)
             if commandSelector == #selector(NSResponder.insertNewline(_:)) {
                 guard !textView.hasMarkedText() else { return false }
                 text = textView.string
@@ -1411,6 +1427,12 @@ private struct BoundedTextInput: NSViewRepresentable {
             }
 
             return false
+        }
+
+        func beginEditing(_ textView: NSTextView) {
+            isEditing = true
+            isEditingBinding = true
+            textView.insertionPointColor = textView.textColor ?? .labelColor
         }
     }
 }

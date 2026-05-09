@@ -10,9 +10,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private lazy var selectionTranslator = SelectionTranslator(
         translationService: translationService,
         settings: settingsModel,
-        showSettings: { [weak self] in self?.showSettings() }
+        showSettings: { [weak self] in self?.showSettings() },
+        showClipboard: { [weak self] in self?.showClipboardHistory() }
     )
-    private lazy var historyWindowController = ClipboardHistoryWindowController(monitor: clipboardMonitor)
+    private lazy var historyWindowController = ClipboardHistoryWindowController(monitor: clipboardMonitor, settings: settingsModel)
     private var settingsWindowController: SettingsWindowController!
     private lazy var hotKeyManager = GlobalHotKeyManager { [weak self] in
         self?.translateSelection()
@@ -77,7 +78,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             previewWindowController = SelectionTranslationWindowController(
                 translationService: translationService,
                 settings: settingsModel,
-                showSettings: { [weak self] in self?.showSettings() }
+                showSettings: { [weak self] in self?.showSettings() },
+                showClipboard: { [weak self] in self?.showClipboardHistory() }
             )
         }
         previewWindowController?.showNoSelection()

@@ -12,6 +12,7 @@ final class SelectionTranslationWindowController: NSWindowController {
     private let translationService: TranslationService
     private let settings: AppSettingsModel
     private let showSettingsAction: () -> Void
+    private let showClipboardAction: () -> Void
     private let islandModel = TranslationIslandModel()
     private weak var hostingView: NSView?
     private var lastSourceText = ""
@@ -38,11 +39,13 @@ final class SelectionTranslationWindowController: NSWindowController {
     init(
         translationService: TranslationService,
         settings: AppSettingsModel,
-        showSettings: @escaping () -> Void
+        showSettings: @escaping () -> Void,
+        showClipboard: @escaping () -> Void
     ) {
         self.translationService = translationService
         self.settings = settings
         self.showSettingsAction = showSettings
+        self.showClipboardAction = showClipboard
         self.currentSourceLanguage = settings.sourceLanguageCode
         self.currentTargetLanguage = settings.targetLanguageCode
 
@@ -221,6 +224,7 @@ final class SelectionTranslationWindowController: NSWindowController {
     }
 
     private func sourceTextChanged(_ text: String) {
+        guard text != lastSourceText || text != islandModel.sourceText else { return }
         lastSourceText = text
         islandModel.sourceText = text
         scheduledTranslation?.cancel()
@@ -427,7 +431,7 @@ final class SelectionTranslationWindowController: NSWindowController {
 
     private func startInteractionMonitoring() {
         if localEventMonitor == nil {
-            localEventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .mouseMoved, .leftMouseDown]) { [weak self] event in
+            localEventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .mouseMoved]) { [weak self] event in
                 guard let self else { return event }
 
                 if event.type == .keyDown && event.keyCode == 53 {
@@ -437,8 +441,6 @@ final class SelectionTranslationWindowController: NSWindowController {
 
                 if event.type == .mouseMoved {
                     self.handleMouseMoved(at: NSEvent.mouseLocation)
-                } else if event.type == .leftMouseDown {
-                    self.handleMouseDown(at: NSEvent.mouseLocation)
                 }
 
                 return event
@@ -475,7 +477,7 @@ final class SelectionTranslationWindowController: NSWindowController {
     private func handleMouseMoved(at screenPoint: NSPoint) {
         guard window?.isVisible == true else { return }
 
-        if islandModel.phase == .closed, closedIslandRect().contains(screenPoint) {
+        if islandModel.phase == .closed, closedIslandSide(at: screenPoint) == .translation {
             scheduleHoverOpen()
             return
         }
@@ -500,10 +502,15 @@ final class SelectionTranslationWindowController: NSWindowController {
         guard window?.isVisible == true else { return }
 
         if islandModel.phase == .closed {
-            if closedIslandRect().contains(screenPoint) {
+            if let side = closedIslandSide(at: screenPoint) {
                 hoverOpenWorkItem?.cancel()
                 hoverOpenWorkItem = nil
-                presentIsland()
+                switch side {
+                case .translation:
+                    presentIsland()
+                case .clipboard:
+                    showClipboardAction()
+                }
             }
             return
         }
@@ -535,6 +542,12 @@ final class SelectionTranslationWindowController: NSWindowController {
             width: closedSize.width,
             height: closedSize.height
         )
+    }
+
+    private func closedIslandSide(at screenPoint: NSPoint) -> ClosedIslandSide? {
+        let rect = closedIslandRect()
+        guard rect.contains(screenPoint) else { return nil }
+        return screenPoint.x < rect.midX ? .translation : .clipboard
     }
 
     private func openedIslandRect() -> NSRect {
@@ -630,8 +643,14 @@ private enum TranslationIslandPhase {
     case opened
 }
 
+private enum ClosedIslandSide {
+    case translation
+    case clipboard
+}
+
 private let translationIslandOpenAnimation = Animation.spring(response: 0.42, dampingFraction: 0.8, blendDuration: 0)
 private let translationIslandCloseAnimation = Animation.smooth(duration: 0.3)
+private let miniIslandGlyphSize: CGFloat = 22
 
 private struct TranslationPalette {
     let theme: AppThemePreference
@@ -721,12 +740,11 @@ private struct TranslationIslandView: View {
 
                 if !usesOpenedSurface {
                     HStack(spacing: 0) {
-                        MiniIslandPetGlyph(tint: palette.cyan)
+                        MiniIslandPetGlyph(kind: .translation, tint: palette.cyan, size: miniIslandGlyphSize)
                         Spacer(minLength: 0)
-                        MiniIslandPetGlyph(tint: Color.orange)
+                        MiniIslandPetGlyph(kind: .clipboard, tint: Color.orange, size: miniIslandGlyphSize)
                     }
-                    .frame(width: max(0, model.closedSize.width - 18), height: model.closedSize.height)
-                    .padding(.top, max(0, (model.closedSize.height - 24) / 2))
+                    .frame(width: max(0, model.closedSize.width - 14), height: model.closedSize.height, alignment: .center)
                     .allowsHitTesting(false)
                 }
 
@@ -1146,17 +1164,116 @@ private struct TranslationTextDisplay: View {
     let foregroundColor: Color
 
     var body: some View {
-        ScrollView(.vertical, showsIndicators: true) {
-            Text(text)
-                .font(.system(size: fontSize, weight: .bold))
-                .foregroundStyle(foregroundColor)
-                .multilineTextAlignment(.leading)
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .topLeading)
-                .padding(.trailing, 6)
-        }
-        .environment(\.layoutDirection, .leftToRight)
+        SelectableTextDisplay(text: text, fontSize: fontSize, foregroundColor: foregroundColor)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+}
+
+private struct SelectableTextDisplay: NSViewRepresentable {
+    let text: String
+    let fontSize: CGFloat
+    let foregroundColor: Color
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scrollView = NSScrollView()
+        scrollView.drawsBackground = false
+        scrollView.borderType = .noBorder
+        scrollView.hasVerticalScroller = true
+        scrollView.hasHorizontalScroller = false
+        scrollView.autohidesScrollers = true
+        scrollView.scrollerStyle = .overlay
+        scrollView.contentView.drawsBackground = false
+
+        let textView = CopyableTextView()
+        textView.drawsBackground = false
+        textView.backgroundColor = .clear
+        textView.isEditable = false
+        textView.isSelectable = true
+        textView.isRichText = false
+        textView.importsGraphics = false
+        textView.isHorizontallyResizable = false
+        textView.isVerticallyResizable = true
+        textView.autoresizingMask = [.width]
+        textView.textContainerInset = .zero
+        textView.textContainer?.lineFragmentPadding = 0
+        textView.textContainer?.widthTracksTextView = true
+        textView.textContainer?.heightTracksTextView = false
+        textView.textContainer?.maximumNumberOfLines = 0
+        textView.allowsUndo = false
+        textView.string = text
+        applyStyle(to: textView)
+
+        scrollView.documentView = textView
+        return scrollView
+    }
+
+    func updateNSView(_ scrollView: NSScrollView, context: Context) {
+        guard let textView = scrollView.documentView as? NSTextView else { return }
+        if textView.string != text {
+            let selectedRange = textView.selectedRange()
+            textView.string = text
+            if selectedRange.location <= textView.string.utf16.count {
+                textView.setSelectedRange(NSRange(location: selectedRange.location, length: min(selectedRange.length, textView.string.utf16.count - selectedRange.location)))
+            }
+        }
+        textView.textContainer?.containerSize = NSSize(
+            width: max(0, scrollView.contentSize.width),
+            height: CGFloat.greatestFiniteMagnitude
+        )
+        applyStyle(to: textView)
+    }
+
+    private func applyStyle(to textView: NSTextView) {
+        let paragraphStyle = NSMutableParagraphStyle()
+        paragraphStyle.alignment = .left
+        paragraphStyle.baseWritingDirection = .leftToRight
+        paragraphStyle.lineBreakMode = .byWordWrapping
+
+        let color = NSColor(foregroundColor)
+        let font = NSFont.systemFont(ofSize: fontSize, weight: .bold)
+        textView.font = font
+        textView.textColor = color
+        textView.baseWritingDirection = .leftToRight
+        textView.alignment = .left
+        textView.defaultParagraphStyle = paragraphStyle
+        textView.typingAttributes = [
+            .font: font,
+            .paragraphStyle: paragraphStyle,
+            .foregroundColor: color
+        ]
+
+        let fullRange = NSRange(location: 0, length: textView.string.utf16.count)
+        guard fullRange.length > 0 else { return }
+        textView.textStorage?.addAttributes([
+            .font: font,
+            .paragraphStyle: paragraphStyle,
+            .foregroundColor: color
+        ], range: fullRange)
+    }
+}
+
+private final class CopyableTextView: NSTextView {
+    override func copy(_ sender: Any?) {
+        let selected = selectedRange()
+        guard selected.length > 0,
+              let range = Range(selected, in: string)
+        else {
+            super.copy(sender)
+            return
+        }
+
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(String(string[range]), forType: .string)
+    }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if event.type == .keyDown,
+           event.modifierFlags.intersection(.deviceIndependentFlagsMask).contains(.command),
+           event.charactersIgnoringModifiers?.lowercased() == "c" {
+            copy(nil)
+            return true
+        }
+        return super.performKeyEquivalent(with: event)
     }
 }
 
@@ -1381,7 +1498,9 @@ private struct BoundedTextInput: NSViewRepresentable {
             beginEditing(textView)
             isEditingMarkedText = textView.hasMarkedText()
             guard !isEditingMarkedText else { return }
-            text = textView.string
+            if text != textView.string {
+                text = textView.string
+            }
         }
 
         func textDidBeginEditing(_ notification: Notification) {
@@ -1396,7 +1515,9 @@ private struct BoundedTextInput: NSViewRepresentable {
             isEditingBinding = false
             if let textView = notification.object as? NSTextView {
                 textView.insertionPointColor = textView.textColor ?? .labelColor
-                text = textView.string
+                if text != textView.string {
+                    text = textView.string
+                }
             }
         }
 
@@ -1416,7 +1537,9 @@ private struct BoundedTextInput: NSViewRepresentable {
             beginEditing(textView)
             if commandSelector == #selector(NSResponder.insertNewline(_:)) {
                 guard !textView.hasMarkedText() else { return false }
-                text = textView.string
+                if text != textView.string {
+                    text = textView.string
+                }
                 onSubmit()
                 return true
             }
@@ -1438,22 +1561,68 @@ private struct BoundedTextInput: NSViewRepresentable {
 }
 
 private struct MiniIslandPetGlyph: View {
+    enum Kind {
+        case translation
+        case clipboard
+    }
+
+    let kind: Kind
     let tint: Color
+    let size: CGFloat
 
     var body: some View {
-        Canvas { context, size in
-            let block = min(size.width, size.height) / 5
-            for point in [
-                CGPoint(x: 1, y: 1), CGPoint(x: 3, y: 1),
-                CGPoint(x: 0, y: 2), CGPoint(x: 1, y: 2), CGPoint(x: 2, y: 2), CGPoint(x: 3, y: 2), CGPoint(x: 4, y: 2),
-                CGPoint(x: 1, y: 3), CGPoint(x: 2, y: 3), CGPoint(x: 3, y: 3),
-                CGPoint(x: 0, y: 4), CGPoint(x: 4, y: 4)
-            ] {
-                let rect = CGRect(x: point.x * block, y: point.y * block, width: block * 0.78, height: block * 0.78)
-                context.fill(Path(roundedRect: rect, cornerRadius: block * 0.16), with: .color(tint.opacity(0.72)))
+        ZStack {
+            switch kind {
+            case .translation:
+                translationGlyph
+            case .clipboard:
+                clipboardGlyph
             }
         }
-        .frame(width: 22, height: 22)
+        .frame(width: size, height: size)
+    }
+
+    private var translationGlyph: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: size * 0.22, style: .continuous)
+                .stroke(tint.opacity(0.78), lineWidth: max(1.35, size * 0.08))
+                .frame(width: size * 0.64, height: size * 0.5)
+                .offset(x: size * 0.08, y: size * 0.02)
+
+            Text("文")
+                .font(.system(size: size * 0.44, weight: .bold))
+                .foregroundStyle(tint)
+                .offset(x: -size * 0.12, y: -size * 0.11)
+
+            Image(systemName: "arrow.left.arrow.right")
+                .font(.system(size: size * 0.26, weight: .bold))
+                .foregroundStyle(tint.opacity(0.9))
+                .offset(x: size * 0.12, y: size * 0.23)
+        }
+    }
+
+    private var clipboardGlyph: some View {
+        ZStack(alignment: .top) {
+            RoundedRectangle(cornerRadius: size * 0.16, style: .continuous)
+                .stroke(tint.opacity(0.82), lineWidth: max(1.35, size * 0.08))
+                .frame(width: size * 0.6, height: size * 0.68)
+                .offset(y: size * 0.12)
+
+            RoundedRectangle(cornerRadius: size * 0.1, style: .continuous)
+                .fill(Color.black.opacity(0.95))
+                .overlay {
+                    RoundedRectangle(cornerRadius: size * 0.1, style: .continuous)
+                        .stroke(tint.opacity(0.85), lineWidth: max(1.25, size * 0.07))
+                }
+                .frame(width: size * 0.34, height: size * 0.18)
+
+            VStack(spacing: size * 0.09) {
+                Capsule().fill(tint.opacity(0.86))
+                Capsule().fill(tint.opacity(0.62))
+            }
+            .frame(width: size * 0.35, height: size * 0.22)
+            .offset(y: size * 0.36)
+        }
     }
 }
 

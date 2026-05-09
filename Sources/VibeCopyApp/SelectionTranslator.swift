@@ -7,14 +7,21 @@ final class SelectionTranslator {
     private let translationService: TranslationService
     private let settings: AppSettingsModel
     private let showSettings: () -> Void
+    private let showClipboard: () -> Void
     private let reader = SelectedTextReader()
     private var windowController: SelectionTranslationWindowController?
     private var translationGeneration = 0
 
-    init(translationService: TranslationService, settings: AppSettingsModel, showSettings: @escaping () -> Void) {
+    init(
+        translationService: TranslationService,
+        settings: AppSettingsModel,
+        showSettings: @escaping () -> Void,
+        showClipboard: @escaping () -> Void
+    ) {
         self.translationService = translationService
         self.settings = settings
         self.showSettings = showSettings
+        self.showClipboard = showClipboard
     }
 
     func translateCurrentSelection() {
@@ -71,7 +78,8 @@ final class SelectionTranslator {
         let controller = SelectionTranslationWindowController(
             translationService: translationService,
             settings: settings,
-            showSettings: showSettings
+            showSettings: showSettings,
+            showClipboard: showClipboard
         )
         windowController = controller
         return controller

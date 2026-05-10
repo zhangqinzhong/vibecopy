@@ -5,10 +5,11 @@ final class GlobalHotKeyManager {
     private let action: () -> Void
     private var hotKeyRef: EventHotKeyRef?
     private var eventHandlerRef: EventHandlerRef?
-    private let hotKeyID = EventHotKeyID(signature: GlobalHotKeyManager.signature, id: 1)
+    private let hotKeyID: EventHotKeyID
 
-    init(action: @escaping () -> Void) {
+    init(id: UInt32 = 1, action: @escaping () -> Void) {
         self.action = action
+        self.hotKeyID = EventHotKeyID(signature: GlobalHotKeyManager.signature, id: id)
     }
 
     deinit {
@@ -58,12 +59,12 @@ final class GlobalHotKeyManager {
                 nil,
                 &hotKeyID
             )
+            let manager = Unmanaged<GlobalHotKeyManager>.fromOpaque(userData).takeUnretainedValue()
             guard status == noErr,
                   hotKeyID.signature == GlobalHotKeyManager.signature,
-                  hotKeyID.id == 1
+                  hotKeyID.id == manager.hotKeyID.id
             else { return noErr }
 
-            let manager = Unmanaged<GlobalHotKeyManager>.fromOpaque(userData).takeUnretainedValue()
             DispatchQueue.main.async {
                 NSLog("VibeCopy global hotkey triggered")
                 manager.action()

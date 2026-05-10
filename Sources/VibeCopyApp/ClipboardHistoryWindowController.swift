@@ -5,26 +5,33 @@ import SwiftUI
 final class ClipboardHistoryWindowController: NSWindowController {
     private let monitor: ClipboardMonitor
     private let settings: AppSettingsModel
+    private let showSettingsAction: () -> Void
+    private let pasteEntryAction: (ClipboardEntry) -> Void
     private var themeCancellable: AnyCancellable?
+    private var keyMonitor: Any?
 
-    init(monitor: ClipboardMonitor, settings: AppSettingsModel) {
+    init(
+        monitor: ClipboardMonitor,
+        settings: AppSettingsModel,
+        showSettings: @escaping () -> Void,
+        pasteEntry: @escaping (ClipboardEntry) -> Void
+    ) {
         self.monitor = monitor
         self.settings = settings
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 640, height: 700),
-            styleMask: [.titled, .closable, .resizable, .fullSizeContentView],
+        self.showSettingsAction = showSettings
+        self.pasteEntryAction = pasteEntry
+        let window = ClipboardHistoryWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 420, height: 600),
+            styleMask: [.borderless, .resizable],
             backing: .buffered,
             defer: false
         )
         window.title = "剪贴板历史"
-        window.titleVisibility = .hidden
-        window.titlebarAppearsTransparent = true
-        window.toolbarStyle = .unifiedCompact
         window.isMovableByWindowBackground = true
         window.isOpaque = false
         window.backgroundColor = .clear
-        window.hasShadow = true
-        window.minSize = NSSize(width: 560, height: 560)
+        window.hasShadow = false
+        window.minSize = NSSize(width: 420, height: 360)
         window.appearance = settings.themePreference.resolvedAppearance
         window.center()
         super.init(window: window)
@@ -35,9 +42,16 @@ final class ClipboardHistoryWindowController: NSWindowController {
         visualEffectView.state = .active
         visualEffectView.wantsLayer = true
         visualEffectView.layer?.backgroundColor = NSColor.clear.cgColor
+        visualEffectView.layer?.cornerRadius = 18
+        visualEffectView.layer?.masksToBounds = true
 
         let hostingView = ClearHostingView(
-            rootView: ClipboardHistoryView(monitor: monitor, settings: settings)
+            rootView: ClipboardHistoryView(
+                monitor: monitor,
+                settings: settings,
+                showSettings: showSettings,
+                pasteEntry: pasteEntry
+            )
         )
         hostingView.translatesAutoresizingMaskIntoConstraints = false
         visualEffectView.addSubview(hostingView)
@@ -54,15 +68,39 @@ final class ClipboardHistoryWindowController: NSWindowController {
             .sink { [weak window] preference in
                 window?.appearance = preference.resolvedAppearance
             }
+
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak window] event in
+            guard window?.isVisible == true, event.keyCode == 53 else { return event }
+            window?.close()
+            return nil
+        }
     }
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
     }
+
+    deinit {
+        if let keyMonitor {
+            NSEvent.removeMonitor(keyMonitor)
+        }
+    }
 }
 
 private final class ClearHostingView<Content: View>: NSHostingView<Content> {
     override var isOpaque: Bool { false }
+
+    override func cancelOperation(_ sender: Any?) {
+        window?.close()
+    }
+
+    override func keyDown(with event: NSEvent) {
+        if event.keyCode == 53 {
+            window?.close()
+            return
+        }
+        super.keyDown(with: event)
+    }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
@@ -71,9 +109,25 @@ private final class ClearHostingView<Content: View>: NSHostingView<Content> {
     }
 }
 
+private final class ClipboardHistoryWindow: NSWindow {
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { true }
+
+    override func cancelOperation(_ sender: Any?) {
+        close()
+    }
+
+    override func keyDown(with event: NSEvent) {
+        if event.keyCode == 53 {
+            close()
+            return
+        }
+        super.keyDown(with: event)
+    }
+}
+
 private enum ClipboardFilter: String, CaseIterable, Identifiable {
     case all
-    case pinned
     case today
     case text
     case image
@@ -85,7 +139,6 @@ private enum ClipboardFilter: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .all: return "全部"
-        case .pinned: return "📌"
         case .today: return "今天"
         case .text: return "文本"
         case .image: return "图像"
@@ -98,6 +151,8 @@ private enum ClipboardFilter: String, CaseIterable, Identifiable {
 private struct ClipboardHistoryView: View {
     @ObservedObject var monitor: ClipboardMonitor
     @ObservedObject var settings: AppSettingsModel
+    let showSettings: () -> Void
+    let pasteEntry: (ClipboardEntry) -> Void
     @State private var searchText = ""
     @State private var selectedFilter: ClipboardFilter = .all
     @State private var selectedEntryID: ClipboardEntry.ID?
@@ -111,8 +166,6 @@ private struct ClipboardHistoryView: View {
             let matchesFilter: Bool = switch selectedFilter {
             case .all:
                 true
-            case .pinned:
-                entry.isPinned
             case .today:
                 Calendar.current.isDateInToday(entry.createdAt)
             case .text:
@@ -142,35 +195,30 @@ private struct ClipboardHistoryView: View {
         }
         .background(ClipboardGlassBackground(palette: palette))
         .preferredColorScheme(settings.preferredColorScheme)
-        .onAppear {
-            if selectedEntryID == nil {
-                selectedEntryID = filteredEntries.first?.id
-            }
-        }
         .onChange(of: filteredEntries.map(\.id)) { _, ids in
             guard !ids.contains(where: { $0 == selectedEntryID }) else { return }
-            selectedEntryID = ids.first
+            selectedEntryID = nil
         }
     }
 
     private var header: some View {
         HStack(spacing: 16) {
             Image(systemName: "doc.on.clipboard")
-                .font(.system(size: 24, weight: .medium))
+                .font(.system(size: 20, weight: .regular))
                 .foregroundStyle(palette.icon)
-                .frame(width: 40)
+                .frame(width: 28)
 
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass")
-                    .font(.system(size: 18, weight: .medium))
+                    .font(.system(size: 15, weight: .regular))
                     .foregroundStyle(palette.icon)
                 TextField("输入开始搜索...", text: $searchText)
                     .textFieldStyle(.plain)
-                    .font(.system(size: 18, weight: .medium))
+                    .font(.system(size: 15, weight: .regular))
                     .foregroundStyle(palette.primaryText)
             }
-            .padding(.horizontal, 15)
-            .frame(height: 44)
+            .padding(.horizontal, 12)
+            .frame(height: 34)
             .background(.thinMaterial, in: Capsule())
             .background(palette.searchFill, in: Capsule())
             .overlay {
@@ -180,39 +228,40 @@ private struct ClipboardHistoryView: View {
             .shadow(color: palette.topHighlight, radius: 1, x: 0, y: -0.5)
 
             Button {
+                showSettings()
             } label: {
                 Image(systemName: "gearshape")
-                .font(.system(size: 23, weight: .medium))
+                .font(.system(size: 19, weight: .regular))
                     .foregroundStyle(palette.icon)
-                    .frame(width: 38, height: 38)
+                    .frame(width: 30, height: 30)
             }
             .buttonStyle(.plain)
             .help("设置")
         }
-        .padding(.horizontal, 22)
-        .padding(.top, 18)
-        .padding(.bottom, 12)
+        .padding(.horizontal, 16)
+        .padding(.top, 12)
+        .padding(.bottom, 8)
     }
 
     private var filterBar: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 12) {
+            HStack(spacing: 8) {
                 ForEach(ClipboardFilter.allCases) { filter in
                     Button {
                         selectedFilter = filter
                     } label: {
                         Text(filter.title)
-                            .font(.system(size: 18, weight: .semibold))
+                            .font(.system(size: 15, weight: .regular))
                             .foregroundStyle(selectedFilter == filter ? palette.accent : palette.secondaryText)
-                            .padding(.horizontal, filter == .pinned ? 14 : 16)
-                            .frame(height: 38)
+                            .padding(.horizontal, 12)
+                            .frame(height: 30)
                             .background {
                                 if selectedFilter == filter {
-                                    RoundedRectangle(cornerRadius: 11, style: .continuous)
+                                    RoundedRectangle(cornerRadius: 8, style: .continuous)
                                         .fill(palette.selectedTabFill)
-                                        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+                                        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                                         .overlay {
-                                            RoundedRectangle(cornerRadius: 11, style: .continuous)
+                                            RoundedRectangle(cornerRadius: 8, style: .continuous)
                                                 .stroke(palette.glassStroke, lineWidth: 1)
                                         }
                                 }
@@ -221,55 +270,41 @@ private struct ClipboardHistoryView: View {
                     .buttonStyle(.plain)
                 }
             }
-            .padding(.horizontal, 24)
-            .padding(.bottom, 13)
+            .padding(.horizontal, 18)
+            .padding(.bottom, 9)
         }
     }
 
     private var content: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(spacing: 14) {
-                    ForEach(Array(filteredEntries.enumerated()), id: \.element.id) { index, entry in
-                        ClipboardEntryCard(
-                            entry: entry,
-                            shortcutIndex: index < 9 ? index + 1 : nil,
-                            isSelected: selectedEntryID == entry.id,
-                            palette: palette,
-                            copyAction: { copy(entry) },
-                            pinAction: { monitor.togglePin(entry) },
-                            deleteAction: { monitor.remove(entry) }
-                        )
-                        .id(entry.id)
-                        .onTapGesture {
-                            selectedEntryID = entry.id
-                        }
-                        .onTapGesture(count: 2) {
-                            copy(entry)
-                        }
-                    }
+        ScrollView(showsIndicators: false) {
+            LazyVStack(spacing: 10) {
+                ForEach(filteredEntries, id: \.id) { entry in
+                    ClipboardEntryCard(
+                        entry: entry,
+                        isSelected: selectedEntryID == entry.id,
+                        palette: palette,
+                        selectAction: { selectedEntryID = entry.id },
+                        copyAction: { copy(entry) },
+                        pasteAction: { paste(entry) },
+                        deleteAction: { monitor.remove(entry) }
+                    )
+                    .id(entry.id)
+                }
 
-                    if filteredEntries.isEmpty {
-                        VStack(spacing: 12) {
-                            Image(systemName: "clipboard")
-                                .font(.system(size: 42))
-                                .foregroundStyle(.secondary)
-                            Text(searchText.isEmpty ? "还没有剪贴板记录" : "没有匹配的记录")
-                                .font(.system(size: 18, weight: .medium))
-                                .foregroundStyle(.secondary)
-                        }
-                        .frame(maxWidth: .infinity)
-                        .padding(.top, 120)
+                if filteredEntries.isEmpty {
+                    VStack(spacing: 12) {
+                        Image(systemName: "clipboard")
+                            .font(.system(size: 42))
+                            .foregroundStyle(.secondary)
+                        Text(searchText.isEmpty ? "还没有剪贴板记录" : "没有匹配的记录")
+                            .font(.system(size: 18, weight: .regular))
+                            .foregroundStyle(.secondary)
                     }
-                }
-                .padding(24)
-            }
-            .onChange(of: selectedEntryID) { _, id in
-                guard let id else { return }
-                withAnimation(.easeOut(duration: 0.18)) {
-                    proxy.scrollTo(id, anchor: .center)
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, 120)
                 }
             }
+            .padding(16)
         }
     }
 
@@ -278,13 +313,13 @@ private struct ClipboardHistoryView: View {
             Spacer()
 
             Text("\(filteredEntries.count) 个项目")
-                .font(.system(size: 17, weight: .medium))
+                .font(.system(size: 14, weight: .regular))
                 .foregroundStyle(palette.secondaryText)
 
             Spacer()
         }
-        .padding(.horizontal, 24)
-        .frame(height: 48)
+        .padding(.horizontal, 16)
+        .frame(height: 36)
         .background(.ultraThinMaterial)
         .background(palette.footerFill)
     }
@@ -293,15 +328,20 @@ private struct ClipboardHistoryView: View {
         selectedEntryID = entry.id
         monitor.copy(entry)
     }
+
+    private func paste(_ entry: ClipboardEntry) {
+        selectedEntryID = entry.id
+        pasteEntry(entry)
+    }
 }
 
 private struct ClipboardPalette {
     let theme: AppThemePreference
 
     var isDark: Bool { theme.resolvesToDark }
-    var primaryText: Color { isDark ? Color.white.opacity(0.9) : Color.black.opacity(0.82) }
-    var secondaryText: Color { isDark ? Color.white.opacity(0.62) : Color.black.opacity(0.58) }
-    var icon: Color { isDark ? Color.white.opacity(0.62) : Color.black.opacity(0.46) }
+    var primaryText: Color { isDark ? Color.white.opacity(0.96) : Color.black.opacity(0.88) }
+    var secondaryText: Color { isDark ? Color.white.opacity(0.7) : Color.black.opacity(0.64) }
+    var icon: Color { isDark ? Color.white.opacity(0.72) : Color.black.opacity(0.54) }
     var accent: Color { isDark ? Color(red: 0.34, green: 0.72, blue: 1) : Color(red: 0.02, green: 0.44, blue: 0.98) }
     var divider: Color { isDark ? Color.white.opacity(0.08) : Color.black.opacity(0.08) }
     var glassStroke: Color { isDark ? Color.white.opacity(0.16) : Color.white.opacity(0.64) }
@@ -312,7 +352,7 @@ private struct ClipboardPalette {
     var selectedTabFill: Color { isDark ? Color(red: 0.13, green: 0.35, blue: 0.72).opacity(0.5) : Color(red: 0.58, green: 0.75, blue: 1).opacity(0.5) }
     var backgroundTintTop: Color { isDark ? Color(red: 0.06, green: 0.1, blue: 0.14).opacity(0.38) : Color(red: 0.76, green: 0.91, blue: 1).opacity(0.28) }
     var backgroundTintBottom: Color { isDark ? Color(red: 0.02, green: 0.05, blue: 0.08).opacity(0.42) : Color(red: 0.68, green: 0.88, blue: 1).opacity(0.22) }
-    var softShadow: Color { Color.black.opacity(isDark ? 0.22 : 0.05) }
+    var softShadow: Color { Color.black.opacity(isDark ? 0.12 : 0.03) }
     var topHighlight: Color { Color.white.opacity(isDark ? 0.1 : 0.45) }
 }
 
@@ -340,65 +380,54 @@ private struct ClipboardGlassBackground: View {
 
 private struct ClipboardEntryCard: View {
     let entry: ClipboardEntry
-    let shortcutIndex: Int?
     let isSelected: Bool
     let palette: ClipboardPalette
+    let selectAction: () -> Void
     let copyAction: () -> Void
-    let pinAction: () -> Void
+    let pasteAction: () -> Void
     let deleteAction: () -> Void
 
     var body: some View {
-        HStack(alignment: .center, spacing: 18) {
+        HStack(alignment: .center, spacing: 14) {
             preview
-                .frame(width: 330, height: 82)
+                .frame(width: 250, height: 58)
                 .frame(maxWidth: .infinity, alignment: .center)
 
-            VStack(alignment: .trailing, spacing: 14) {
+            VStack(alignment: .trailing, spacing: 9) {
                 Text(Self.timeFormatter.string(from: entry.createdAt))
-                    .font(.system(size: 16, weight: .medium))
+                    .font(.system(size: 14, weight: .regular))
                     .foregroundStyle(palette.secondaryText)
 
                 Spacer(minLength: 0)
 
-                HStack(spacing: 10) {
-                    if let shortcutIndex {
-                        Text("⌘ \(shortcutIndex)")
-                            .font(.system(size: 20, weight: .medium))
-                    }
-                    actionButton(systemName: entry.isPinned ? "pin.fill" : "pin", action: pinAction)
+                HStack(spacing: 8) {
                     actionButton(systemName: "trash", action: deleteAction)
                 }
                 .foregroundStyle(Color.primary.opacity(0.85))
                 .foregroundStyle(palette.primaryText.opacity(0.85))
             }
-            .frame(width: 100, alignment: .trailing)
+            .frame(width: 82, alignment: .trailing)
         }
-        .padding(.horizontal, 24)
-        .padding(.vertical, 15)
-        .frame(minHeight: 112)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 11)
+        .frame(minHeight: 82)
+        .background {
+            ClipboardEntryClickSurface(
+                singleClick: selectAction,
+                doubleClick: pasteAction
+            )
+        }
         .background(cardBackground)
         .overlay {
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .stroke(isSelected ? palette.accent : .clear, lineWidth: 3)
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(isSelected ? palette.accent : .clear, lineWidth: 2)
         }
-        .shadow(color: palette.softShadow.opacity(isSelected ? 1 : 0.62), radius: isSelected ? 18 : 10, x: 0, y: isSelected ? 9 : 5)
+        .shadow(color: palette.softShadow.opacity(0.18), radius: 2, x: 0, y: 1)
         .shadow(color: palette.topHighlight, radius: 1, x: 0, y: -0.5)
-        .contentShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-        .overlay {
-            if let shortcutIndex {
-                Button {
-                    copyAction()
-                } label: {
-                    EmptyView()
-                }
-                .keyboardShortcut(KeyEquivalent(Character("\(shortcutIndex)")), modifiers: .command)
-                .opacity(0)
-                .frame(width: 0, height: 0)
-            }
-        }
+        .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .contextMenu {
             Button("复制") { copyAction() }
-            Button(entry.isPinned ? "取消固定" : "固定") { pinAction() }
+            Button("粘贴") { pasteAction() }
             Button("删除") { deleteAction() }
         }
     }
@@ -418,9 +447,9 @@ private struct ClipboardEntryCard: View {
         case .file:
             VStack(spacing: 8) {
                 Image(systemName: "doc")
-                    .font(.system(size: 24, weight: .medium))
+                    .font(.system(size: 20, weight: .regular))
                 Text(entry.previewText)
-                    .font(.system(size: 16, weight: .semibold))
+                    .font(.system(size: 14, weight: .regular))
                     .lineLimit(2)
                     .multilineTextAlignment(.center)
             }
@@ -428,39 +457,38 @@ private struct ClipboardEntryCard: View {
         case .link:
             VStack(alignment: .leading, spacing: 8) {
                 Label("链接", systemImage: "link")
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(.system(size: 12, weight: .regular))
                     .foregroundStyle(Color.blue)
                     .foregroundStyle(palette.accent)
                 Text(entry.previewText)
-                    .font(.system(size: 16, weight: .semibold))
-                    .lineLimit(3)
+                    .font(.system(size: 14, weight: .regular))
+                    .lineLimit(2)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
         case .text:
             Text(entry.previewText)
-                .font(.system(size: 16, weight: .semibold))
+                .font(.system(size: 14, weight: .regular))
                 .foregroundStyle(palette.primaryText)
-                .lineLimit(4)
+                .lineLimit(3)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
     private var cardBackground: some View {
-        RoundedRectangle(cornerRadius: 22, style: .continuous)
-            .fill(isSelected ? palette.selectedCardFill : palette.cardFill)
-            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        RoundedRectangle(cornerRadius: 14, style: .continuous)
+            .fill(palette.cardFill)
             .overlay {
-                RoundedRectangle(cornerRadius: 22, style: .continuous)
-                    .stroke(palette.glassStroke.opacity(isSelected ? 1 : 0.72), lineWidth: 1)
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(palette.glassStroke.opacity(0.56), lineWidth: 1)
             }
     }
 
     private func fallbackPreview(_ text: String, systemName: String) -> some View {
         VStack(spacing: 8) {
             Image(systemName: systemName)
-                .font(.system(size: 30, weight: .medium))
+                .font(.system(size: 24, weight: .regular))
             Text(text)
-                .font(.system(size: 16, weight: .medium))
+                .font(.system(size: 14, weight: .regular))
         }
         .foregroundStyle(palette.secondaryText)
     }
@@ -468,8 +496,8 @@ private struct ClipboardEntryCard: View {
     private func actionButton(systemName: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: systemName)
-                .font(.system(size: 15, weight: .semibold))
-                .frame(width: 24, height: 24)
+                .font(.system(size: 14, weight: .regular))
+                .frame(width: 22, height: 22)
         }
         .buttonStyle(.plain)
     }
@@ -481,9 +509,47 @@ private struct ClipboardEntryCard: View {
     }()
 }
 
+private struct ClipboardEntryClickSurface: NSViewRepresentable {
+    let singleClick: () -> Void
+    let doubleClick: () -> Void
+
+    func makeNSView(context: Context) -> ClickSurfaceView {
+        let view = ClickSurfaceView()
+        view.singleClick = singleClick
+        view.doubleClick = doubleClick
+        return view
+    }
+
+    func updateNSView(_ nsView: ClickSurfaceView, context: Context) {
+        nsView.singleClick = singleClick
+        nsView.doubleClick = doubleClick
+    }
+}
+
+private final class ClickSurfaceView: NSView {
+    var singleClick: (() -> Void)?
+    var doubleClick: (() -> Void)?
+
+    override var acceptsFirstResponder: Bool { true }
+
+    override func mouseDown(with event: NSEvent) {
+        if event.clickCount >= 2 {
+            doubleClick?()
+        } else {
+            singleClick?()
+        }
+    }
+}
+
 private extension ClipboardEntry {
+    private static var imageCache: [UUID: NSImage] = [:]
+
     var image: NSImage? {
-        guard let imageData else { return nil }
-        return NSImage(data: imageData)
+        if let cached = Self.imageCache[id] {
+            return cached
+        }
+        guard let imageData, let image = NSImage(data: imageData) else { return nil }
+        Self.imageCache[id] = image
+        return image
     }
 }

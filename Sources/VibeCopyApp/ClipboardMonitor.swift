@@ -1,7 +1,7 @@
 import AppKit
 import Combine
 
-enum ClipboardEntryKind: String, CaseIterable, Identifiable {
+enum ClipboardEntryKind: String, CaseIterable, Identifiable, Codable {
     case text
     case link
     case image
@@ -10,7 +10,7 @@ enum ClipboardEntryKind: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
-struct ClipboardEntry: Identifiable, Equatable {
+struct ClipboardEntry: Identifiable, Equatable, Codable {
     let id: UUID
     let kind: ClipboardEntryKind
     let value: String
@@ -63,11 +63,16 @@ struct ClipboardEntry: Identifiable, Equatable {
 }
 
 final class ClipboardMonitor: NSObject, ObservableObject {
-    @Published private(set) var entries: [ClipboardEntry] = []
+    @Published private(set) var entries: [ClipboardEntry]
     private var timer: Timer?
     private var lastChangeCount = NSPasteboard.general.changeCount
 
     var onChange: (() -> Void)?
+
+    override init() {
+        entries = Self.loadEntries()
+        super.init()
+    }
 
     func start() {
         timer?.invalidate()
@@ -159,6 +164,7 @@ final class ClipboardMonitor: NSObject, ObservableObject {
     }
 
     private func notifyChange() {
+        Self.saveEntriesAsync(entries)
         onChange?()
     }
 
@@ -188,6 +194,65 @@ final class ClipboardMonitor: NSObject, ObservableObject {
             return .link
         }
         return .text
+    }
+}
+
+private extension ClipboardMonitor {
+    static let saveQueue = DispatchQueue(label: "app.vibecopy.clipboard-history-save", qos: .utility)
+
+    static var historyFileURL: URL? {
+        guard let supportDirectory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
+            return nil
+        }
+        return supportDirectory
+            .appendingPathComponent("VibeCopy", isDirectory: true)
+            .appendingPathComponent("clipboard-history.json")
+    }
+
+    static func loadEntries() -> [ClipboardEntry] {
+        guard let fileURL = historyFileURL,
+              let data = try? Data(contentsOf: fileURL)
+        else { return [] }
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        guard let entries = try? decoder.decode([ClipboardEntry].self, from: data) else {
+            return []
+        }
+
+        return entries
+            .sorted { lhs, rhs in
+                if lhs.isPinned != rhs.isPinned { return lhs.isPinned && !rhs.isPinned }
+                return lhs.createdAt > rhs.createdAt
+            }
+            .prefix(200)
+            .map { $0 }
+    }
+
+    static func saveEntriesAsync(_ entries: [ClipboardEntry]) {
+        let snapshot = entries
+        saveQueue.async {
+            saveEntries(snapshot)
+        }
+    }
+
+    static func saveEntries(_ entries: [ClipboardEntry]) {
+        guard let fileURL = historyFileURL else { return }
+
+        do {
+            try FileManager.default.createDirectory(
+                at: fileURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            encoder.outputFormatting = [.sortedKeys]
+            let data = try encoder.encode(entries)
+            try data.write(to: fileURL, options: .atomic)
+        } catch {
+            NSLog("Failed to save clipboard history: \(error.localizedDescription)")
+        }
     }
 }
 

@@ -96,32 +96,35 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
 private struct SettingsView: View {
     @ObservedObject var settings: AppSettingsModel
     @State private var selectedTab: SettingsTab = .general
-    private var isDark: Bool { settings.themePreference.resolvesToDark }
+    private var palette: SettingsPalette { SettingsPalette(theme: settings.themePreference) }
 
     var body: some View {
         HStack(spacing: 0) {
             sidebar
 
             Divider()
+                .overlay(palette.divider)
 
             VStack(spacing: 0) {
                 Text(selectedTab.title)
-                    .font(.system(size: 22, weight: .bold))
+                    .font(.system(size: 22, weight: .semibold))
+                    .foregroundStyle(palette.primaryText)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 32)
                     .padding(.top, 24)
                     .padding(.bottom, 14)
 
                 Divider()
+                    .overlay(palette.divider)
 
                 detailView
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .background(contentBackground)
+            .background(Color.clear)
         }
         .frame(minWidth: 700, minHeight: 500)
         .preferredColorScheme(settings.preferredColorScheme)
-        .background(contentBackground)
+        .background(SettingsGlassBackground(palette: palette))
         .onAppear {
             settings.refreshSupportedLanguages()
         }
@@ -138,10 +141,10 @@ private struct SettingsView: View {
                 } label: {
                     HStack(spacing: 12) {
                         Image(systemName: tab.icon)
-                            .font(.system(size: 15, weight: .semibold))
+                            .font(.system(size: 15, weight: .medium))
                             .frame(width: 20)
                         Text(tab.title)
-                            .font(.system(size: 14, weight: .semibold))
+                            .font(.system(size: 14, weight: .medium))
                         Spacer(minLength: 0)
                     }
                     .frame(maxWidth: .infinity, minHeight: 50, alignment: .leading)
@@ -149,10 +152,10 @@ private struct SettingsView: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(selectedTab == tab ? Color.primary : Color.secondary)
+                .foregroundStyle(selectedTab == tab ? palette.primaryText : palette.secondaryText)
                 .background(
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(selectedTab == tab ? Color.primary.opacity(0.12) : Color.clear)
+                        .fill(selectedTab == tab ? palette.selectedFill : Color.clear)
                 )
                 .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             }
@@ -161,15 +164,7 @@ private struct SettingsView: View {
         }
         .padding(.horizontal, 14)
         .frame(width: 210)
-        .background(sidebarBackground)
-    }
-
-    private var sidebarBackground: Color {
-        isDark ? Color(red: 0.03, green: 0.03, blue: 0.035) : Color(nsColor: .windowBackgroundColor).opacity(0.7)
-    }
-
-    private var contentBackground: Color {
-        isDark ? Color(red: 0.02, green: 0.02, blue: 0.025) : Color(nsColor: .windowBackgroundColor)
+        .background(palette.sidebarFill)
     }
 
     @ViewBuilder
@@ -186,6 +181,36 @@ private struct SettingsView: View {
         case .about:
             AboutSettingsPane()
         }
+    }
+}
+
+private struct SettingsPalette {
+    let theme: AppThemePreference
+
+    var isDark: Bool { theme.resolvesToDark }
+    var primaryText: Color { isDark ? Color(red: 0.88, green: 0.91, blue: 0.94) : Color.black.opacity(0.82) }
+    var secondaryText: Color { isDark ? Color.white.opacity(0.62) : Color.black.opacity(0.56) }
+    var divider: Color { isDark ? Color.white.opacity(0.08) : Color.black.opacity(0.08) }
+    var sidebarFill: Color { isDark ? Color(red: 0.08, green: 0.11, blue: 0.14).opacity(0.72) : Color.white.opacity(0.36) }
+    var selectedFill: Color { isDark ? Color.white.opacity(0.1) : Color.black.opacity(0.08) }
+    var backgroundTop: Color { isDark ? Color(red: 0.17, green: 0.21, blue: 0.25).opacity(0.76) : Color(red: 0.95, green: 0.98, blue: 1).opacity(0.82) }
+    var backgroundBottom: Color { isDark ? Color(red: 0.08, green: 0.11, blue: 0.14).opacity(0.82) : Color.white.opacity(0.88) }
+}
+
+private struct SettingsGlassBackground: View {
+    let palette: SettingsPalette
+
+    var body: some View {
+        ZStack {
+            Rectangle()
+                .fill(.ultraThinMaterial)
+            LinearGradient(
+                colors: [palette.backgroundTop, Color.clear, palette.backgroundBottom],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        }
+        .ignoresSafeArea()
     }
 }
 
@@ -227,52 +252,99 @@ private struct GeneralSettingsPane: View {
             }
 
             Section("行为") {
-                Text("闭合入口左侧用于翻译，右侧预留给后续剪贴板历史。")
+                Text("闭合入口左侧用于翻译，右侧用于打开剪贴板历史。")
                     .foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)
+        .scrollContentBackground(.hidden)
+        .background(Color.clear)
     }
 }
 
 private struct ShortcutSettingsPane: View {
     @ObservedObject var settings: AppSettingsModel
-    @State private var isRecording = false
-    @State private var validationMessage: String?
+    @State private var isRecordingSelection = false
+    @State private var selectionValidationMessage: String?
+    @State private var isRecordingClipboard = false
+    @State private var clipboardValidationMessage: String?
 
     var body: some View {
         Form {
-            Section("划词翻译") {
-                Toggle("启用全局快捷键", isOn: $settings.selectionHotKeyEnabled)
-
-                HStack {
-                    Text("快捷键")
-                    Spacer()
-                    HotKeyRecorderButton(
-                        hotKey: settings.selectionHotKey,
-                        isRecording: $isRecording,
-                        validationMessage: $validationMessage
-                    ) { keyCode, modifiers in
-                        settings.setSelectionHotKey(keyCode: keyCode, modifiers: modifiers)
-                    }
-                }
-
-                Text(settings.selectionHotKeyStatusMessage)
-                    .font(.caption)
-                    .foregroundStyle(settings.selectionHotKeyHasConflict ? .red : .secondary)
-
-                if let validationMessage {
-                    Text(validationMessage)
-                        .font(.caption)
-                        .foregroundStyle(.orange)
-                }
-
+            HotKeySettingsSection(
+                title: "划词翻译",
+                enabled: $settings.selectionHotKeyEnabled,
+                hotKey: settings.selectionHotKey,
+                isRecording: $isRecordingSelection,
+                validationMessage: $selectionValidationMessage,
+                statusMessage: settings.selectionHotKeyStatusMessage,
+                hasConflict: settings.selectionHotKeyHasConflict,
+                setHotKey: settings.setSelectionHotKey
+            ) {
                 Text("在任意 App 中选中文本后按设置的快捷键，VibeCopy 会读取选区并打开翻译岛。当前版本使用自动方向：中文转英文，非中文转简体中文。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            HotKeySettingsSection(
+                title: "唤醒剪贴板",
+                enabled: $settings.clipboardHotKeyEnabled,
+                hotKey: settings.clipboardHotKey,
+                isRecording: $isRecordingClipboard,
+                validationMessage: $clipboardValidationMessage,
+                statusMessage: settings.clipboardHotKeyStatusMessage,
+                hasConflict: settings.clipboardHotKeyHasConflict,
+                setHotKey: settings.setClipboardHotKey
+            ) {
+                Text("按下设置的快捷键会直接打开剪贴板历史窗口。默认是 ⌥C。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)
+        .scrollContentBackground(.hidden)
+        .background(Color.clear)
+    }
+}
+
+private struct HotKeySettingsSection<Footer: View>: View {
+    let title: String
+    @Binding var enabled: Bool
+    let hotKey: HotKeyConfiguration
+    @Binding var isRecording: Bool
+    @Binding var validationMessage: String?
+    let statusMessage: String
+    let hasConflict: Bool
+    let setHotKey: (UInt32, UInt32) -> Void
+    @ViewBuilder var footer: () -> Footer
+
+    var body: some View {
+        Section(title) {
+            Toggle("启用全局快捷键", isOn: $enabled)
+
+            HStack {
+                Text("快捷键")
+                Spacer()
+                HotKeyRecorderButton(
+                    hotKey: hotKey,
+                    isRecording: $isRecording,
+                    validationMessage: $validationMessage,
+                    onChange: setHotKey
+                )
+            }
+
+            Text(statusMessage)
+                .font(.caption)
+                .foregroundStyle(hasConflict ? .red : .secondary)
+
+            if let validationMessage {
+                Text(validationMessage)
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+
+            footer()
+        }
     }
 }
 
@@ -370,14 +442,14 @@ private struct AppearanceSettingsPane: View {
             }
         }
         .formStyle(.grouped)
+        .scrollContentBackground(.hidden)
+        .background(Color.clear)
     }
 }
 
 private struct LanguageSettingsPane: View {
     @ObservedObject var settings: AppSettingsModel
-    private var paneBackground: Color {
-        Color(nsColor: .controlBackgroundColor)
-    }
+    private var paneBackground: Color { Color.clear }
 
     var body: some View {
         ScrollView {
@@ -510,6 +582,8 @@ private struct AboutSettingsPane: View {
             }
         }
         .formStyle(.grouped)
+        .scrollContentBackground(.hidden)
+        .background(Color.clear)
     }
 }
 

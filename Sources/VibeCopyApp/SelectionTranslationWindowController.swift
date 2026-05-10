@@ -142,8 +142,9 @@ final class SelectionTranslationWindowController: NSWindowController {
         presentIsland()
     }
 
-    func dismissIsland() {
+    func dismissIsland(respectingPin: Bool = false) {
         guard let window, window.isVisible else { return }
+        guard !respectingPin || !isPinned else { return }
         transitionGeneration &+= 1
         let generation = transitionGeneration
         hoverOpenWorkItem?.cancel()
@@ -494,7 +495,7 @@ final class SelectionTranslationWindowController: NSWindowController {
         }
 
         if islandModel.phase == .opened, hasPointerEnteredOpenedIsland {
-            dismissIsland()
+            dismissIsland(respectingPin: true)
         }
     }
 
@@ -516,7 +517,7 @@ final class SelectionTranslationWindowController: NSWindowController {
         }
 
         if islandModel.phase == .opened, !openedIslandRect().contains(screenPoint) {
-            dismissIsland()
+            dismissIsland(respectingPin: true)
         }
     }
 
@@ -656,18 +657,19 @@ private struct TranslationPalette {
     let theme: AppThemePreference
 
     var isDark: Bool { theme.resolvesToDark }
-    var ink: Color { isDark ? Color(red: 0.91, green: 0.94, blue: 0.96) : Color(red: 0.08, green: 0.09, blue: 0.11) }
-    var muted: Color { isDark ? Color(red: 0.62, green: 0.66, blue: 0.7) : Color(red: 0.38, green: 0.4, blue: 0.42) }
+    var ink: Color { isDark ? Color(red: 0.88, green: 0.91, blue: 0.94) : Color(red: 0.08, green: 0.09, blue: 0.11) }
+    var muted: Color { isDark ? Color(red: 0.62, green: 0.67, blue: 0.72) : Color(red: 0.38, green: 0.4, blue: 0.42) }
     var cyan: Color { Color(red: 0.07, green: 0.75, blue: 0.82) }
-    var placeholder: Color { isDark ? Color.white.opacity(0.18) : Color(red: 0.08, green: 0.09, blue: 0.11).opacity(0.22) }
-    var surfaceTop: Color { isDark ? Color.black : .white }
-    var surfaceMiddle: Color { isDark ? Color.black : Color(red: 0.97, green: 0.98, blue: 0.99) }
-    var surfaceBottom: Color { isDark ? Color.black : .white }
-    var buttonFill: Color { isDark ? Color(red: 0.055, green: 0.055, blue: 0.065) : .white }
-    var highlight: Color { isDark ? Color.white.opacity(0.06) : .white }
-    var rimOpacity: Double { isDark ? 0.05 : 0.72 }
-    var secondaryRimOpacity: Double { isDark ? 0 : 0.035 }
-    var glowOpacity: Double { isDark ? 0 : 1 }
+    var placeholder: Color { isDark ? Color.white.opacity(0.15) : Color(red: 0.08, green: 0.09, blue: 0.11).opacity(0.22) }
+    var surfaceTop: Color { isDark ? Color(red: 0.17, green: 0.21, blue: 0.25) : .white }
+    var surfaceMiddle: Color { isDark ? Color(red: 0.12, green: 0.16, blue: 0.19) : Color(red: 0.97, green: 0.98, blue: 0.99) }
+    var surfaceBottom: Color { isDark ? Color(red: 0.08, green: 0.11, blue: 0.14) : .white }
+    var surfaceOpacity: Double { isDark ? 0.68 : 0.98 }
+    var buttonFill: Color { isDark ? Color(red: 0.1, green: 0.13, blue: 0.16) : .white }
+    var highlight: Color { isDark ? Color.white.opacity(0.12) : .white }
+    var rimOpacity: Double { isDark ? 0.16 : 0.72 }
+    var secondaryRimOpacity: Double { isDark ? 0.08 : 0.035 }
+    var glowOpacity: Double { isDark ? 0.28 : 1 }
     var shadow: Color { .black }
 }
 
@@ -796,9 +798,9 @@ private struct TranslationIslandView: View {
             .fill(
                 LinearGradient(
                     colors: [
-                        palette.surfaceTop.opacity(usesOpenedSurface ? 0.98 : 1),
-                        palette.surfaceMiddle.opacity(usesOpenedSurface ? 0.98 : 1),
-                        palette.surfaceBottom.opacity(usesOpenedSurface ? 0.98 : 1)
+                        palette.surfaceTop.opacity(usesOpenedSurface ? palette.surfaceOpacity : min(1, palette.surfaceOpacity + 0.14)),
+                        palette.surfaceMiddle.opacity(usesOpenedSurface ? palette.surfaceOpacity : min(1, palette.surfaceOpacity + 0.14)),
+                        palette.surfaceBottom.opacity(usesOpenedSurface ? palette.surfaceOpacity : min(1, palette.surfaceOpacity + 0.14))
                     ],
                     startPoint: .top,
                     endPoint: .bottom

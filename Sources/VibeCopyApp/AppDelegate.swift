@@ -13,15 +13,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         showSettings: { [weak self] in self?.showSettings() },
         showClipboard: { [weak self] in self?.showClipboardHistory() }
     )
-    private lazy var historyWindowController = ClipboardHistoryWindowController(monitor: clipboardMonitor, settings: settingsModel)
+    private lazy var historyWindowController = ClipboardHistoryWindowController(
+        monitor: clipboardMonitor,
+        settings: settingsModel,
+        showSettings: { [weak self] in self?.showSettings() },
+        pasteEntry: { [weak self] entry in self?.pasteClipboardEntry(entry) }
+    )
     private var settingsWindowController: SettingsWindowController!
-    private lazy var hotKeyManager = GlobalHotKeyManager { [weak self] in
+    private lazy var selectionHotKeyManager = GlobalHotKeyManager(id: 1) { [weak self] in
         self?.translateSelection()
+    }
+    private lazy var clipboardHotKeyManager = GlobalHotKeyManager(id: 2) { [weak self] in
+        self?.showClipboardHistory()
     }
     private var previewWindowController: SelectionTranslationWindowController?
     private var statusController: StatusBarController?
     private var hotKeySettingsCancellable: AnyCancellable?
     private var hotKeyConfigurationCancellable: AnyCancellable?
+    private var clipboardHotKeySettingsCancellable: AnyCancellable?
+    private var clipboardHotKeyConfigurationCancellable: AnyCancellable?
+    private var appBeforeClipboard: NSRunningApplication?
+    private var workspaceActivationObserver: Any?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusController = StatusBarController(
@@ -35,6 +47,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         clipboardMonitor.start()
         settingsWindowController = SettingsWindowController(settings: settingsModel)
+        observeActiveApplications()
         configureHotKeys()
     }
 
@@ -44,9 +57,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func showClipboardHistory() {
+        let currentApp = NSRunningApplication.current
+        let frontmostApp = NSWorkspace.shared.frontmostApplication
+        if frontmostApp?.processIdentifier != currentApp.processIdentifier {
+            appBeforeClipboard = frontmostApp
+        }
+
         NSApp.activate(ignoringOtherApps: true)
         historyWindowController.showWindow(nil)
         historyWindowController.window?.makeKeyAndOrderFront(nil)
+    }
+
+    private func pasteClipboardEntry(_ entry: ClipboardEntry) {
+        clipboardMonitor.copy(entry)
+        historyWindowController.window?.close()
+
+        guard let targetApp = appBeforeClipboard else { return }
+        guard Self.ensureAccessibilityPermission() else { return }
+        targetApp.activate(options: [.activateAllWindows])
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) {
+            Self.sendCommandV()
+        }
     }
 
     private func translateSelection() {
@@ -58,18 +90,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hotKeySettingsCancellable = settingsModel.$selectionHotKeyEnabled
             .sink { [weak self] isEnabled in
                 guard let self else { return }
-                let status = self.hotKeyManager.setEnabled(isEnabled, configuration: self.settingsModel.selectionHotKey)
+                let status = self.selectionHotKeyManager.setEnabled(isEnabled, configuration: self.settingsModel.selectionHotKey)
                 self.settingsModel.updateSelectionHotKeyStatus(status)
             }
         hotKeyConfigurationCancellable = settingsModel.$selectionHotKey
             .sink { [weak self] _ in
                 self?.updateSelectionHotKey()
             }
+
+        updateClipboardHotKey()
+        clipboardHotKeySettingsCancellable = settingsModel.$clipboardHotKeyEnabled
+            .sink { [weak self] isEnabled in
+                guard let self else { return }
+                let status = self.clipboardHotKeyManager.setEnabled(isEnabled, configuration: self.settingsModel.clipboardHotKey)
+                self.settingsModel.updateClipboardHotKeyStatus(status)
+            }
+        clipboardHotKeyConfigurationCancellable = settingsModel.$clipboardHotKey
+            .sink { [weak self] _ in
+                self?.updateClipboardHotKey()
+            }
     }
 
     private func updateSelectionHotKey() {
-        let status = hotKeyManager.setEnabled(settingsModel.selectionHotKeyEnabled, configuration: settingsModel.selectionHotKey)
+        let status = selectionHotKeyManager.setEnabled(settingsModel.selectionHotKeyEnabled, configuration: settingsModel.selectionHotKey)
         settingsModel.updateSelectionHotKeyStatus(status)
+    }
+
+    private func updateClipboardHotKey() {
+        let status = clipboardHotKeyManager.setEnabled(settingsModel.clipboardHotKeyEnabled, configuration: settingsModel.clipboardHotKey)
+        settingsModel.updateClipboardHotKeyStatus(status)
     }
 
     private func showTranslationPreview() {
@@ -89,5 +138,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate(ignoringOtherApps: true)
         settingsWindowController.showCentered()
         settingsModel.refreshSupportedLanguages()
+    }
+
+    private func observeActiveApplications() {
+        workspaceActivationObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let self,
+                  let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
+                  app.processIdentifier != NSRunningApplication.current.processIdentifier
+            else { return }
+            Task { @MainActor in
+                self.appBeforeClipboard = app
+            }
+        }
+    }
+
+    private static func ensureAccessibilityPermission() -> Bool {
+        let options = [
+            kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true
+        ] as CFDictionary
+        return AXIsProcessTrustedWithOptions(options)
+    }
+
+    private static func sendCommandV() {
+        let source = CGEventSource(stateID: .combinedSessionState)
+        let keyCode = CGKeyCode(9)
+        let keyDown = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: true)
+        let keyUp = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: false)
+
+        keyDown?.flags = .maskCommand
+        keyUp?.flags = .maskCommand
+        keyDown?.post(tap: .cghidEventTap)
+        keyUp?.post(tap: .cghidEventTap)
     }
 }

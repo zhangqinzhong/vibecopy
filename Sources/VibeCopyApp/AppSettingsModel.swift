@@ -84,6 +84,7 @@ struct HotKeyConfiguration: Equatable {
     var modifiers: UInt32
 
     static let defaultSelection = HotKeyConfiguration(keyCode: UInt32(kVK_ANSI_D), modifiers: HotKeyModifier.option)
+    static let defaultClipboard = HotKeyConfiguration(keyCode: UInt32(kVK_ANSI_C), modifiers: HotKeyModifier.option)
 
     var displayName: String {
         "\(modifierDisplayName)\(keyDisplayName)"
@@ -146,6 +147,9 @@ final class AppSettingsModel: ObservableObject {
         static let selectionHotKeyEnabled = "settings.selectionHotKeyEnabled"
         static let selectionHotKeyCode = "settings.selectionHotKeyCode"
         static let selectionHotKeyModifiers = "settings.selectionHotKeyModifiers"
+        static let clipboardHotKeyEnabled = "settings.clipboardHotKeyEnabled"
+        static let clipboardHotKeyCode = "settings.clipboardHotKeyCode"
+        static let clipboardHotKeyModifiers = "settings.clipboardHotKeyModifiers"
     }
 
     @Published var themePreference: AppThemePreference {
@@ -179,11 +183,26 @@ final class AppSettingsModel: ObservableObject {
         }
     }
 
+    @Published var clipboardHotKeyEnabled: Bool {
+        didSet {
+            UserDefaults.standard.set(clipboardHotKeyEnabled, forKey: DefaultsKey.clipboardHotKeyEnabled)
+        }
+    }
+
+    @Published var clipboardHotKey: HotKeyConfiguration {
+        didSet {
+            UserDefaults.standard.set(Int(clipboardHotKey.keyCode), forKey: DefaultsKey.clipboardHotKeyCode)
+            UserDefaults.standard.set(Int(clipboardHotKey.modifiers), forKey: DefaultsKey.clipboardHotKeyModifiers)
+        }
+    }
+
     @Published var supportedLanguages: [TranslationLanguageOption] = AppSettingsModel.fallbackLanguages
     @Published var languageStatuses: [TranslationLanguageStatus] = []
     @Published var languageStatusMessage = "语言状态会在打开设置时刷新。"
     @Published var selectionHotKeyStatusMessage = "快捷键尚未注册。"
     @Published var selectionHotKeyHasConflict = false
+    @Published var clipboardHotKeyStatusMessage = "快捷键尚未注册。"
+    @Published var clipboardHotKeyHasConflict = false
     @Published var isRefreshingLanguages = false
     @Published var isPreparingLanguagePack = false
 
@@ -206,10 +225,21 @@ final class AppSettingsModel: ObservableObject {
                 UInt32(UserDefaults.standard.object(forKey: DefaultsKey.selectionHotKeyModifiers) as? Int ?? Int(HotKeyConfiguration.defaultSelection.modifiers))
             )
         )
+        clipboardHotKeyEnabled = UserDefaults.standard.object(forKey: DefaultsKey.clipboardHotKeyEnabled) as? Bool ?? true
+        clipboardHotKey = HotKeyConfiguration(
+            keyCode: UInt32(UserDefaults.standard.object(forKey: DefaultsKey.clipboardHotKeyCode) as? Int ?? Int(HotKeyConfiguration.defaultClipboard.keyCode)),
+            modifiers: Self.normalizedHotKeyModifiers(
+                UInt32(UserDefaults.standard.object(forKey: DefaultsKey.clipboardHotKeyModifiers) as? Int ?? Int(HotKeyConfiguration.defaultClipboard.modifiers))
+            )
+        )
     }
 
     func setSelectionHotKey(keyCode: UInt32, modifiers: UInt32) {
         selectionHotKey = HotKeyConfiguration(keyCode: keyCode, modifiers: modifiers)
+    }
+
+    func setClipboardHotKey(keyCode: UInt32, modifiers: UInt32) {
+        clipboardHotKey = HotKeyConfiguration(keyCode: keyCode, modifiers: modifiers)
     }
 
     private static func normalizedHotKeyModifiers(_ modifiers: UInt32) -> UInt32 {
@@ -248,16 +278,25 @@ final class AppSettingsModel: ObservableObject {
     }
 
     func updateSelectionHotKeyStatus(_ status: OSStatus) {
+        let result = Self.hotKeyStatusMessage(status: status, isEnabled: selectionHotKeyEnabled)
+        selectionHotKeyHasConflict = result.hasConflict
+        selectionHotKeyStatusMessage = result.message
+    }
+
+    func updateClipboardHotKeyStatus(_ status: OSStatus) {
+        let result = Self.hotKeyStatusMessage(status: status, isEnabled: clipboardHotKeyEnabled)
+        clipboardHotKeyHasConflict = result.hasConflict
+        clipboardHotKeyStatusMessage = result.message
+    }
+
+    private static func hotKeyStatusMessage(status: OSStatus, isEnabled: Bool) -> (message: String, hasConflict: Bool) {
         switch status {
         case noErr:
-            selectionHotKeyHasConflict = false
-            selectionHotKeyStatusMessage = selectionHotKeyEnabled ? "快捷键已注册。" : "快捷键已关闭。"
+            return (isEnabled ? "快捷键已注册。" : "快捷键已关闭。", false)
         case OSStatus(eventHotKeyExistsErr):
-            selectionHotKeyHasConflict = true
-            selectionHotKeyStatusMessage = "快捷键冲突：这个组合已被系统或其他 App 占用。"
+            return ("快捷键冲突：这个组合已被系统或其他 App 占用。", true)
         default:
-            selectionHotKeyHasConflict = true
-            selectionHotKeyStatusMessage = "快捷键注册失败（OSStatus \(status)）。"
+            return ("快捷键注册失败（OSStatus \(status)）。", true)
         }
     }
 

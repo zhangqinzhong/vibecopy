@@ -9,6 +9,7 @@ final class ClipboardHistoryWindowController: NSWindowController {
     private let pasteEntryAction: (ClipboardEntry) -> Void
     private var themeCancellable: AnyCancellable?
     private var keyMonitor: Any?
+    private var deactivateObserver: Any?
 
     init(
         monitor: ClipboardMonitor,
@@ -50,7 +51,8 @@ final class ClipboardHistoryWindowController: NSWindowController {
                 monitor: monitor,
                 settings: settings,
                 showSettings: showSettings,
-                pasteEntry: pasteEntry
+                pasteEntry: pasteEntry,
+                closeWindow: { [weak window] in window?.hideForReuse() }
             )
         )
         hostingView.translatesAutoresizingMaskIntoConstraints = false
@@ -71,8 +73,15 @@ final class ClipboardHistoryWindowController: NSWindowController {
 
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak window] event in
             guard window?.isVisible == true, event.keyCode == 53 else { return event }
-            window?.close()
+            window?.hideForReuse()
             return nil
+        }
+        deactivateObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didResignActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak window] _ in
+            window?.hideForReuse()
         }
     }
 
@@ -84,6 +93,9 @@ final class ClipboardHistoryWindowController: NSWindowController {
         if let keyMonitor {
             NSEvent.removeMonitor(keyMonitor)
         }
+        if let deactivateObserver {
+            NotificationCenter.default.removeObserver(deactivateObserver)
+        }
     }
 }
 
@@ -91,12 +103,12 @@ private final class ClearHostingView<Content: View>: NSHostingView<Content> {
     override var isOpaque: Bool { false }
 
     override func cancelOperation(_ sender: Any?) {
-        window?.close()
+        (window as? ClipboardHistoryWindow)?.hideForReuse()
     }
 
     override func keyDown(with event: NSEvent) {
         if event.keyCode == 53 {
-            window?.close()
+            (window as? ClipboardHistoryWindow)?.hideForReuse()
             return
         }
         super.keyDown(with: event)
@@ -113,16 +125,28 @@ private final class ClipboardHistoryWindow: NSWindow {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
 
+    func hideForReuse() {
+        orderOut(nil)
+    }
+
     override func cancelOperation(_ sender: Any?) {
-        close()
+        hideForReuse()
     }
 
     override func keyDown(with event: NSEvent) {
         if event.keyCode == 53 {
-            close()
+            hideForReuse()
             return
         }
         super.keyDown(with: event)
+    }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if event.type == .keyDown, event.keyCode == 53 {
+            hideForReuse()
+            return true
+        }
+        return super.performKeyEquivalent(with: event)
     }
 }
 
@@ -153,6 +177,7 @@ private struct ClipboardHistoryView: View {
     @ObservedObject var settings: AppSettingsModel
     let showSettings: () -> Void
     let pasteEntry: (ClipboardEntry) -> Void
+    let closeWindow: () -> Void
     @State private var searchText = ""
     @State private var selectedFilter: ClipboardFilter = .all
     @State private var selectedEntryID: ClipboardEntry.ID?
@@ -195,6 +220,8 @@ private struct ClipboardHistoryView: View {
         }
         .background(ClipboardGlassBackground(palette: palette))
         .preferredColorScheme(settings.preferredColorScheme)
+        .onExitCommand(perform: closeWindow)
+        .onDeleteCommand(perform: deleteSelectedEntry)
         .onChange(of: filteredEntries.map(\.id)) { _, ids in
             guard !ids.contains(where: { $0 == selectedEntryID }) else { return }
             selectedEntryID = nil
@@ -286,7 +313,7 @@ private struct ClipboardHistoryView: View {
                         selectAction: { selectedEntryID = entry.id },
                         copyAction: { copy(entry) },
                         pasteAction: { paste(entry) },
-                        deleteAction: { monitor.remove(entry) }
+                        deleteAction: { delete(entry) }
                     )
                     .id(entry.id)
                 }
@@ -332,6 +359,17 @@ private struct ClipboardHistoryView: View {
     private func paste(_ entry: ClipboardEntry) {
         selectedEntryID = entry.id
         pasteEntry(entry)
+    }
+
+    private func delete(_ entry: ClipboardEntry) {
+        monitor.remove(entry)
+    }
+
+    private func deleteSelectedEntry() {
+        guard let selectedEntryID,
+              let entry = monitor.entries.first(where: { $0.id == selectedEntryID })
+        else { return }
+        monitor.remove(entry)
     }
 }
 
@@ -389,34 +427,30 @@ private struct ClipboardEntryCard: View {
 
     var body: some View {
         HStack(alignment: .center, spacing: 14) {
-            preview
-                .frame(width: 250, height: 58)
-                .frame(maxWidth: .infinity, alignment: .center)
+            ZStack {
+                preview
+                    .frame(width: 250, height: 58)
+                    .frame(maxWidth: .infinity, alignment: .center)
+
+                ClipboardEntryClickSurface(
+                    singleClick: selectAction,
+                    doubleClick: pasteAction,
+                    delete: deleteAction
+                )
+            }
+            .frame(maxWidth: .infinity)
+            .frame(minHeight: 82)
 
             VStack(alignment: .trailing, spacing: 9) {
                 Text(Self.timeFormatter.string(from: entry.createdAt))
                     .font(.system(size: 14, weight: .regular))
                     .foregroundStyle(palette.secondaryText)
-
-                Spacer(minLength: 0)
-
-                HStack(spacing: 8) {
-                    actionButton(systemName: "trash", action: deleteAction)
-                }
-                .foregroundStyle(Color.primary.opacity(0.85))
-                .foregroundStyle(palette.primaryText.opacity(0.85))
             }
             .frame(width: 82, alignment: .trailing)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 11)
         .frame(minHeight: 82)
-        .background {
-            ClipboardEntryClickSurface(
-                singleClick: selectAction,
-                doubleClick: pasteAction
-            )
-        }
         .background(cardBackground)
         .overlay {
             RoundedRectangle(cornerRadius: 14, style: .continuous)
@@ -493,15 +527,6 @@ private struct ClipboardEntryCard: View {
         .foregroundStyle(palette.secondaryText)
     }
 
-    private func actionButton(systemName: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: systemName)
-                .font(.system(size: 14, weight: .regular))
-                .frame(width: 22, height: 22)
-        }
-        .buttonStyle(.plain)
-    }
-
     private static let timeFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateFormat = "HH:mm"
@@ -512,31 +537,49 @@ private struct ClipboardEntryCard: View {
 private struct ClipboardEntryClickSurface: NSViewRepresentable {
     let singleClick: () -> Void
     let doubleClick: () -> Void
+    let delete: () -> Void
 
     func makeNSView(context: Context) -> ClickSurfaceView {
         let view = ClickSurfaceView()
         view.singleClick = singleClick
         view.doubleClick = doubleClick
+        view.delete = delete
         return view
     }
 
     func updateNSView(_ nsView: ClickSurfaceView, context: Context) {
         nsView.singleClick = singleClick
         nsView.doubleClick = doubleClick
+        nsView.delete = delete
     }
 }
 
 private final class ClickSurfaceView: NSView {
     var singleClick: (() -> Void)?
     var doubleClick: (() -> Void)?
+    var delete: (() -> Void)?
 
     override var acceptsFirstResponder: Bool { true }
 
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        true
+    }
+
     override func mouseDown(with event: NSEvent) {
+        window?.makeFirstResponder(self)
         if event.clickCount >= 2 {
             doubleClick?()
         } else {
             singleClick?()
+        }
+    }
+
+    override func keyDown(with event: NSEvent) {
+        switch event.keyCode {
+        case 51, 117:
+            delete?()
+        default:
+            super.keyDown(with: event)
         }
     }
 }

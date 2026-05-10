@@ -70,7 +70,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func pasteClipboardEntry(_ entry: ClipboardEntry) {
         clipboardMonitor.copy(entry)
-        historyWindowController.window?.close()
+        historyWindowController.window?.orderOut(nil)
 
         guard let targetApp = appBeforeClipboard else { return }
         guard Self.ensureAccessibilityPermission() else { return }

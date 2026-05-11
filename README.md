@@ -51,6 +51,15 @@ scripts/create-dmg.sh
 dist/VibeCopy.dmg
 ```
 
+## GitHub Release
+
+推送 `v*` tag 会触发 GitHub Actions 自动构建 DMG 并上传到 GitHub Release：
+
+```bash
+git tag v0.1.1
+git push origin v0.1.1
+```
+
 ## Translation 语言包
 
 VibeCopy 使用 Apple Translation framework。系统语言包由 macOS 管理：

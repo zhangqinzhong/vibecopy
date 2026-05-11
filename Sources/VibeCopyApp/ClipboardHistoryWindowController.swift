@@ -2,6 +2,11 @@ import AppKit
 import Combine
 import SwiftUI
 
+private extension Notification.Name {
+    static let clipboardHistoryDeleteRequested = Notification.Name("VibeCopyClipboardHistoryDeleteRequested")
+    static let clipboardHistorySearchFocusChanged = Notification.Name("VibeCopyClipboardHistorySearchFocusChanged")
+}
+
 final class ClipboardHistoryWindowController: NSWindowController {
     private let monitor: ClipboardMonitor
     private let settings: AppSettingsModel
@@ -10,6 +15,7 @@ final class ClipboardHistoryWindowController: NSWindowController {
     private var themeCancellable: AnyCancellable?
     private var keyMonitor: Any?
     private var deactivateObserver: Any?
+    private var searchFocusObserver: Any?
 
     init(
         monitor: ClipboardMonitor,
@@ -83,6 +89,13 @@ final class ClipboardHistoryWindowController: NSWindowController {
         ) { [weak window] _ in
             window?.hideForReuse()
         }
+        searchFocusObserver = NotificationCenter.default.addObserver(
+            forName: .clipboardHistorySearchFocusChanged,
+            object: nil,
+            queue: .main
+        ) { [weak window] notification in
+            window?.isSearchFocused = (notification.object as? Bool) ?? false
+        }
     }
 
     required init?(coder: NSCoder) {
@@ -95,6 +108,9 @@ final class ClipboardHistoryWindowController: NSWindowController {
         }
         if let deactivateObserver {
             NotificationCenter.default.removeObserver(deactivateObserver)
+        }
+        if let searchFocusObserver {
+            NotificationCenter.default.removeObserver(searchFocusObserver)
         }
     }
 }
@@ -124,9 +140,28 @@ private final class ClearHostingView<Content: View>: NSHostingView<Content> {
 private final class ClipboardHistoryWindow: NSWindow {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
+    var isSearchFocused = false
 
     func hideForReuse() {
         orderOut(nil)
+    }
+
+    override func sendEvent(_ event: NSEvent) {
+        if event.type == .keyDown {
+            switch event.keyCode {
+            case 53:
+                hideForReuse()
+                return
+            case 51, 117:
+                if !isSearchFocused {
+                    NotificationCenter.default.post(name: .clipboardHistoryDeleteRequested, object: self)
+                    return
+                }
+            default:
+                break
+            }
+        }
+        super.sendEvent(event)
     }
 
     override func cancelOperation(_ sender: Any?) {
@@ -222,6 +257,9 @@ private struct ClipboardHistoryView: View {
         .preferredColorScheme(settings.preferredColorScheme)
         .onExitCommand(perform: closeWindow)
         .onDeleteCommand(perform: deleteSelectedEntry)
+        .onReceive(NotificationCenter.default.publisher(for: .clipboardHistoryDeleteRequested)) { _ in
+            deleteSelectedEntry()
+        }
         .onChange(of: filteredEntries.map(\.id)) { _, ids in
             guard !ids.contains(where: { $0 == selectedEntryID }) else { return }
             selectedEntryID = nil
@@ -239,10 +277,8 @@ private struct ClipboardHistoryView: View {
                 Image(systemName: "magnifyingglass")
                     .font(.system(size: 15, weight: .regular))
                     .foregroundStyle(palette.icon)
-                TextField("输入开始搜索...", text: $searchText)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 15, weight: .regular))
-                    .foregroundStyle(palette.primaryText)
+                ClipboardSearchField(text: $searchText)
+                    .frame(maxWidth: .infinity, minHeight: 22)
             }
             .padding(.horizontal, 12)
             .frame(height: 34)
@@ -316,6 +352,10 @@ private struct ClipboardHistoryView: View {
                         deleteAction: { delete(entry) }
                     )
                     .id(entry.id)
+                    .transition(.asymmetric(
+                        insertion: .opacity,
+                        removal: .scale(scale: 0.98).combined(with: .opacity)
+                    ))
                 }
 
                 if filteredEntries.isEmpty {
@@ -332,6 +372,7 @@ private struct ClipboardHistoryView: View {
                 }
             }
             .padding(16)
+            .animation(.easeOut(duration: 0.18), value: filteredEntries.map(\.id))
         }
     }
 
@@ -362,14 +403,36 @@ private struct ClipboardHistoryView: View {
     }
 
     private func delete(_ entry: ClipboardEntry) {
-        monitor.remove(entry)
+        let nextSelection = replacementSelection(afterDeleting: entry)
+        withAnimation(.easeOut(duration: 0.18)) {
+            selectedEntryID = nextSelection?.id
+            monitor.remove(entry)
+        }
     }
 
     private func deleteSelectedEntry() {
         guard let selectedEntryID,
-              let entry = monitor.entries.first(where: { $0.id == selectedEntryID })
+              let entry = filteredEntries.first(where: { $0.id == selectedEntryID })
         else { return }
-        monitor.remove(entry)
+        delete(entry)
+    }
+
+    private func replacementSelection(afterDeleting entry: ClipboardEntry) -> ClipboardEntry? {
+        guard let index = filteredEntries.firstIndex(where: { $0.id == entry.id }) else {
+            return nil
+        }
+
+        let nextIndex = filteredEntries.index(after: index)
+        if nextIndex < filteredEntries.endIndex {
+            return filteredEntries[nextIndex]
+        }
+
+        if index > filteredEntries.startIndex {
+            let previousIndex = filteredEntries.index(before: index)
+            return filteredEntries[previousIndex]
+        }
+
+        return nil
     }
 }
 
@@ -534,6 +597,54 @@ private struct ClipboardEntryCard: View {
     }()
 }
 
+private struct ClipboardSearchField: NSViewRepresentable {
+    @Binding var text: String
+
+    func makeNSView(context: Context) -> NSTextField {
+        let field = NSTextField()
+        field.placeholderString = "输入开始搜索..."
+        field.isBordered = false
+        field.isBezeled = false
+        field.drawsBackground = false
+        field.focusRingType = .none
+        field.font = .systemFont(ofSize: 15, weight: .regular)
+        field.textColor = .labelColor
+        field.delegate = context.coordinator
+        return field
+    }
+
+    func updateNSView(_ nsView: NSTextField, context: Context) {
+        if nsView.stringValue != text {
+            nsView.stringValue = text
+        }
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(text: $text)
+    }
+
+    final class Coordinator: NSObject, NSTextFieldDelegate {
+        @Binding var text: String
+
+        init(text: Binding<String>) {
+            _text = text
+        }
+
+        func controlTextDidBeginEditing(_ notification: Notification) {
+            NotificationCenter.default.post(name: .clipboardHistorySearchFocusChanged, object: true)
+        }
+
+        func controlTextDidEndEditing(_ notification: Notification) {
+            NotificationCenter.default.post(name: .clipboardHistorySearchFocusChanged, object: false)
+        }
+
+        func controlTextDidChange(_ notification: Notification) {
+            guard let field = notification.object as? NSTextField else { return }
+            text = field.stringValue
+        }
+    }
+}
+
 private struct ClipboardEntryClickSurface: NSViewRepresentable {
     let singleClick: () -> Void
     let doubleClick: () -> Void
@@ -566,7 +677,6 @@ private final class ClickSurfaceView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
-        window?.makeFirstResponder(self)
         if event.clickCount >= 2 {
             doubleClick?()
         } else {

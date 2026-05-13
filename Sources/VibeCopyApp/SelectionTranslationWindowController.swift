@@ -673,6 +673,17 @@ private struct TranslationPalette {
     var shadow: Color { .black }
 }
 
+private struct TranslationPaletteKey: EnvironmentKey {
+    static let defaultValue = TranslationPalette(theme: .system)
+}
+
+private extension EnvironmentValues {
+    var translationPalette: TranslationPalette {
+        get { self[TranslationPaletteKey.self] }
+        set { self[TranslationPaletteKey.self] = newValue }
+    }
+}
+
 private final class TranslationIslandModel: ObservableObject {
     @Published var phase: TranslationIslandPhase = .closed
     @Published var mode: TranslationMode = .empty
@@ -700,6 +711,12 @@ private struct TranslationIslandActions {
     var selectSourceLanguage: (TranslationLanguageOption) -> Void
     var selectTargetLanguage: (TranslationLanguageOption) -> Void
     var dismiss: () -> Void
+}
+
+private struct PaneActionItem {
+    var systemName: String?
+    var text: String?
+    var action: () -> Void
 }
 
 private struct TranslationIslandView: View {
@@ -734,11 +751,12 @@ private struct TranslationIslandView: View {
     }
 
     var body: some View {
+        let palette = TranslationPalette(theme: model.themePreference)
         ZStack(alignment: .top) {
             Color.clear
 
             ZStack(alignment: .top) {
-                islandSurface
+                islandSurface(palette: palette)
 
                 if !usesOpenedSurface {
                     HStack(spacing: 0) {
@@ -781,13 +799,10 @@ private struct TranslationIslandView: View {
         .frame(width: openedSize.width, height: openedSize.height, alignment: .top)
         .animation(panelAnimation, value: model.phase)
         .preferredColorScheme(settings.preferredColorScheme)
+        .environment(\.translationPalette, palette)
     }
 
-    private var palette: TranslationPalette {
-        TranslationPalette(theme: model.themePreference)
-    }
-
-    private var islandSurface: some View {
+    private func islandSurface(palette: TranslationPalette) -> some View {
         ZStack {
             surfaceShape
             .fill(.ultraThinMaterial)
@@ -838,9 +853,7 @@ private struct TranslationIslandContent: View {
     @ObservedObject var settings: AppSettingsModel
     let actions: TranslationIslandActions
 
-    private var palette: TranslationPalette {
-        TranslationPalette(theme: model.themePreference)
-    }
+    @Environment(\.translationPalette) private var palette
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -855,15 +868,14 @@ private struct TranslationIslandContent: View {
                     placeholder: "输入文本",
                     isSource: true,
                     mode: model.mode,
-                    palette: palette,
                     languageOptions: settings.supportedLanguages,
                     selectedLanguageCode: model.sourceLanguage,
                     selectLanguage: actions.selectSourceLanguage,
                     textAreaHeight: 58,
                     submitAction: actions.submitSourceText,
                     actions: [
-                        TranslationActionButton(systemName: "speaker.wave.2", action: actions.speakSource),
-                        TranslationActionButton(systemName: "doc.on.doc", action: actions.copySource)
+                        PaneActionItem(systemName: "speaker.wave.2", action: actions.speakSource),
+                        PaneActionItem(systemName: "doc.on.doc", action: actions.copySource)
                     ]
                 )
                 .frame(height: 112)
@@ -879,17 +891,16 @@ private struct TranslationIslandContent: View {
                     placeholder: "Enter text",
                     isSource: false,
                     mode: model.mode,
-                    palette: palette,
                     languageOptions: settings.supportedLanguages,
                     selectedLanguageCode: model.targetLanguage,
                     selectLanguage: actions.selectTargetLanguage,
                     textAreaHeight: 62,
                     submitAction: nil,
                     actions: [
-                        TranslationActionButton(systemName: "speaker.wave.2", action: actions.speakResult),
-                        TranslationActionButton(systemName: "doc.on.doc", action: actions.copyResult),
-                        TranslationActionButton(text: "Aa", action: actions.copyCamel),
-                        TranslationActionButton(systemName: "minus.square", action: actions.copySnake)
+                        PaneActionItem(systemName: "speaker.wave.2", action: actions.speakResult),
+                        PaneActionItem(systemName: "doc.on.doc", action: actions.copyResult),
+                        PaneActionItem(text: "Aa", action: actions.copyCamel),
+                        PaneActionItem(systemName: "minus.square", action: actions.copySnake)
                     ]
                 )
                 .frame(height: 116)
@@ -907,13 +918,13 @@ private struct TranslationIslandContent: View {
 
     private var toolbar: some View {
         HStack(spacing: 18) {
-            TranslationActionButton(systemName: "pin", isActive: model.isPinned, action: actions.togglePin)
+            TranslationActionButton(systemName: "pin", isActive: model.isPinned, palette: palette, action: actions.togglePin)
                 .offset(x: -28)
             Spacer()
             HStack(spacing: 18) {
-                TranslationActionButton(systemName: "star", action: {})
-                TranslationActionButton(systemName: "viewfinder", action: {})
-                TranslationActionButton(systemName: "gearshape", action: actions.showSettings)
+                TranslationActionButton(systemName: "star", palette: palette, action: {})
+                TranslationActionButton(systemName: "viewfinder", palette: palette, action: {})
+                TranslationActionButton(systemName: "gearshape", palette: palette, action: actions.showSettings)
             }
             .offset(x: 28)
         }
@@ -973,13 +984,14 @@ private struct TranslationPane: View {
     let placeholder: String
     let isSource: Bool
     let mode: TranslationMode
-    let palette: TranslationPalette
     let languageOptions: [TranslationLanguageOption]
     let selectedLanguageCode: String
     let selectLanguage: (TranslationLanguageOption) -> Void
     let textAreaHeight: CGFloat
     let submitAction: (() -> Void)?
-    let actions: [TranslationActionButton]
+    let actions: [PaneActionItem]
+
+    @Environment(\.translationPalette) private var palette
     @State private var isEditingSourceText = false
 
     var body: some View {
@@ -1053,7 +1065,12 @@ private struct TranslationPane: View {
 
             HStack(spacing: 20) {
                 ForEach(actions.indices, id: \.self) { index in
-                    actions[index]
+                    TranslationActionButton(
+                        systemName: actions[index].systemName,
+                        text: actions[index].text,
+                        palette: palette,
+                        action: actions[index].action
+                    )
                 }
             }
             .frame(height: 28, alignment: .center)
@@ -1203,7 +1220,7 @@ private struct SelectableTextDisplay: NSViewRepresentable {
         textView.textContainer?.maximumNumberOfLines = 0
         textView.allowsUndo = false
         textView.string = text
-        applyStyle(to: textView)
+        textView.applyBoldLTRStyle(fontSize: fontSize, color: NSColor(foregroundColor))
 
         scrollView.documentView = textView
         return scrollView
@@ -1222,35 +1239,7 @@ private struct SelectableTextDisplay: NSViewRepresentable {
             width: max(0, scrollView.contentSize.width),
             height: CGFloat.greatestFiniteMagnitude
         )
-        applyStyle(to: textView)
-    }
-
-    private func applyStyle(to textView: NSTextView) {
-        let paragraphStyle = NSMutableParagraphStyle()
-        paragraphStyle.alignment = .left
-        paragraphStyle.baseWritingDirection = .leftToRight
-        paragraphStyle.lineBreakMode = .byWordWrapping
-
-        let color = NSColor(foregroundColor)
-        let font = NSFont.systemFont(ofSize: fontSize, weight: .bold)
-        textView.font = font
-        textView.textColor = color
-        textView.baseWritingDirection = .leftToRight
-        textView.alignment = .left
-        textView.defaultParagraphStyle = paragraphStyle
-        textView.typingAttributes = [
-            .font: font,
-            .paragraphStyle: paragraphStyle,
-            .foregroundColor: color
-        ]
-
-        let fullRange = NSRange(location: 0, length: textView.string.utf16.count)
-        guard fullRange.length > 0 else { return }
-        textView.textStorage?.addAttributes([
-            .font: font,
-            .paragraphStyle: paragraphStyle,
-            .foregroundColor: color
-        ], range: fullRange)
+        textView.applyBoldLTRStyle(fontSize: fontSize, color: NSColor(foregroundColor))
     }
 }
 
@@ -1283,6 +1272,7 @@ private struct TranslationActionButton: View {
     var systemName: String?
     var text: String?
     var isActive = false
+    var palette: TranslationPalette = TranslationPalette(theme: .system)
     var action: () -> Void
     @State private var isAcknowledging = false
 
@@ -1320,7 +1310,7 @@ private struct TranslationActionButton: View {
                         .frame(width: 20, height: 20)
                 }
             }
-            .foregroundStyle(isActive ? Color(red: 0.07, green: 0.75, blue: 0.82) : Color.secondary)
+            .foregroundStyle(isActive ? palette.cyan : Color.secondary)
             .frame(width: 30, height: 30)
             .contentShape(Rectangle())
         }
@@ -1341,20 +1331,13 @@ private struct TranslationActionButton: View {
     }
 
     private var buttonFill: Color {
-        if isActive {
-            return Color(red: 0.07, green: 0.75, blue: 0.82).opacity(0.16)
-        }
-        if isAcknowledging {
-            return Color(red: 0.07, green: 0.75, blue: 0.82).opacity(0.12)
-        }
+        if isActive { return palette.cyan.opacity(0.16) }
+        if isAcknowledging { return palette.cyan.opacity(0.12) }
         return Color.clear
     }
 
     private var buttonStroke: Color {
-        if isActive || isAcknowledging {
-            return Color(red: 0.07, green: 0.75, blue: 0.82).opacity(0.35)
-        }
-        return Color.clear
+        (isActive || isAcknowledging) ? palette.cyan.opacity(0.35) : Color.clear
     }
 }
 
@@ -1426,11 +1409,11 @@ private struct BoundedTextInput: NSViewRepresentable {
         textView.textContainer?.widthTracksTextView = true
         textView.textContainer?.heightTracksTextView = false
         textView.textContainer?.maximumNumberOfLines = 0
-        textView.font = .systemFont(ofSize: fontSize, weight: .bold)
-        textView.textColor = NSColor(palette.ink)
-        textView.insertionPointColor = NSColor(palette.ink)
+        let inkColor = NSColor(palette.ink)
+        textView.textColor = inkColor
+        textView.insertionPointColor = inkColor
         textView.string = text
-        Self.applyLeftToRightParagraphLayout(to: textView, fontSize: fontSize)
+        textView.applyBoldLTRStyle(fontSize: fontSize, color: inkColor)
 
         scrollView.documentView = textView
         context.coordinator.textView = textView
@@ -1446,39 +1429,14 @@ private struct BoundedTextInput: NSViewRepresentable {
         if isFirstResponder {
             context.coordinator.beginEditing(textView)
         }
-        textView.font = .systemFont(ofSize: fontSize, weight: .bold)
-        textView.textColor = NSColor(palette.ink)
-        textView.insertionPointColor = NSColor(palette.ink)
+        let inkColor = NSColor(palette.ink)
+        textView.textColor = inkColor
+        textView.insertionPointColor = inkColor
         textView.textContainer?.containerSize = NSSize(
             width: max(0, scrollView.contentSize.width),
             height: CGFloat.greatestFiniteMagnitude
         )
-        Self.applyLeftToRightParagraphLayout(to: textView, fontSize: fontSize)
-    }
-
-    private static func applyLeftToRightParagraphLayout(to textView: NSTextView, fontSize: CGFloat) {
-        let paragraphStyle = NSMutableParagraphStyle()
-        paragraphStyle.alignment = .left
-        paragraphStyle.baseWritingDirection = .leftToRight
-        paragraphStyle.lineBreakMode = .byWordWrapping
-
-        let font = NSFont.systemFont(ofSize: fontSize, weight: .bold)
-        textView.baseWritingDirection = .leftToRight
-        textView.alignment = .left
-        textView.defaultParagraphStyle = paragraphStyle
-        textView.typingAttributes = [
-            .font: font,
-            .paragraphStyle: paragraphStyle,
-            .foregroundColor: textView.textColor ?? NSColor.labelColor
-        ]
-
-        let fullRange = NSRange(location: 0, length: textView.string.utf16.count)
-        guard fullRange.length > 0 else { return }
-        textView.textStorage?.addAttributes([
-            .paragraphStyle: paragraphStyle,
-            .font: font,
-            .foregroundColor: textView.textColor ?? NSColor.labelColor
-        ], range: fullRange)
+        textView.applyBoldLTRStyle(fontSize: fontSize, color: inkColor)
     }
 
     final class Coordinator: NSObject, NSTextViewDelegate {
@@ -1695,6 +1653,35 @@ private struct DotField: View {
             }
         }
         .allowsHitTesting(false)
+    }
+}
+
+private extension NSTextView {
+    func applyBoldLTRStyle(fontSize: CGFloat, color: NSColor) {
+        let font = NSFont.systemFont(ofSize: fontSize, weight: .bold)
+        let paragraphStyle = NSMutableParagraphStyle()
+        paragraphStyle.alignment = .left
+        paragraphStyle.baseWritingDirection = .leftToRight
+        paragraphStyle.lineBreakMode = .byWordWrapping
+
+        self.font = font
+        self.textColor = color
+        self.baseWritingDirection = .leftToRight
+        self.alignment = .left
+        self.defaultParagraphStyle = paragraphStyle
+        self.typingAttributes = [
+            .font: font,
+            .paragraphStyle: paragraphStyle,
+            .foregroundColor: color
+        ]
+
+        let fullRange = NSRange(location: 0, length: string.utf16.count)
+        guard fullRange.length > 0 else { return }
+        textStorage?.addAttributes([
+            .font: font,
+            .paragraphStyle: paragraphStyle,
+            .foregroundColor: color
+        ], range: fullRange)
     }
 }
 

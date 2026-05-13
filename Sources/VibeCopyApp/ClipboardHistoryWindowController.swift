@@ -5,6 +5,7 @@ import SwiftUI
 private extension Notification.Name {
     static let clipboardHistoryDeleteRequested = Notification.Name("VibeCopyClipboardHistoryDeleteRequested")
     static let clipboardHistorySearchFocusChanged = Notification.Name("VibeCopyClipboardHistorySearchFocusChanged")
+    static let clipboardHistoryArrowNavigation = Notification.Name("VibeCopyClipboardHistoryArrowNavigation")
 }
 
 final class ClipboardHistoryWindowController: NSWindowController {
@@ -157,6 +158,16 @@ private final class ClipboardHistoryWindow: NSWindow {
                     NotificationCenter.default.post(name: .clipboardHistoryDeleteRequested, object: self)
                     return
                 }
+            case 125:
+                if !isSearchFocused {
+                    NotificationCenter.default.post(name: .clipboardHistoryArrowNavigation, object: 1)
+                    return
+                }
+            case 126:
+                if !isSearchFocused {
+                    NotificationCenter.default.post(name: .clipboardHistoryArrowNavigation, object: -1)
+                    return
+                }
             default:
                 break
             }
@@ -259,6 +270,10 @@ private struct ClipboardHistoryView: View {
         .onDeleteCommand(perform: deleteSelectedEntry)
         .onReceive(NotificationCenter.default.publisher(for: .clipboardHistoryDeleteRequested)) { _ in
             deleteSelectedEntry()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .clipboardHistoryArrowNavigation)) { notification in
+            guard let direction = notification.object as? Int else { return }
+            navigateSelection(direction: direction)
         }
         .onChange(of: filteredEntries.map(\.id)) { _, ids in
             guard !ids.contains(where: { $0 == selectedEntryID }) else { return }
@@ -415,6 +430,25 @@ private struct ClipboardHistoryView: View {
               let entry = filteredEntries.first(where: { $0.id == selectedEntryID })
         else { return }
         delete(entry)
+    }
+
+    private func navigateSelection(direction: Int) {
+        let entries = filteredEntries
+        guard !entries.isEmpty else { return }
+
+        if let currentID = selectedEntryID,
+           let currentIndex = entries.firstIndex(where: { $0.id == currentID }) {
+            let nextIndex = currentIndex + direction
+            if nextIndex >= 0, nextIndex < entries.count {
+                selectedEntryID = entries[nextIndex].id
+            } else if direction < 0 {
+                selectedEntryID = entries.first?.id
+            } else {
+                selectedEntryID = entries.last?.id
+            }
+        } else {
+            selectedEntryID = direction > 0 ? entries.first?.id : entries.last?.id
+        }
     }
 
     private func replacementSelection(afterDeleting entry: ClipboardEntry) -> ClipboardEntry? {
@@ -677,6 +711,7 @@ private final class ClickSurfaceView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
+        window?.makeFirstResponder(self)
         if event.clickCount >= 2 {
             doubleClick?()
         } else {

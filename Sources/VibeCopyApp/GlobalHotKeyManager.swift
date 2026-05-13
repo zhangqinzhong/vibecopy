@@ -39,12 +39,17 @@ final class GlobalHotKeyManager {
         )
         if status == noErr {
             hotKeyRef = registeredHotKey
-            installEventHandler()
+            let handlerStatus = installEventHandler()
+            if handlerStatus != noErr {
+                UnregisterEventHotKey(registeredHotKey)
+                hotKeyRef = nil
+                return handlerStatus
+            }
         }
         return status
     }
 
-    private func installEventHandler() {
+    private func installEventHandler() -> OSStatus {
         var eventType = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyReleased))
         let handler: EventHandlerUPP = { _, event, userData in
             guard let event, let userData else { return noErr }
@@ -72,7 +77,7 @@ final class GlobalHotKeyManager {
             return noErr
         }
 
-        InstallEventHandler(
+        let status = InstallEventHandler(
             GetApplicationEventTarget(),
             handler,
             1,
@@ -80,6 +85,10 @@ final class GlobalHotKeyManager {
             UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque()),
             &eventHandlerRef
         )
+        if status != noErr {
+            NSLog("[VibeCopy] GlobalHotKeyManager InstallEventHandler failed: %d for hotkey ID=%u", status, hotKeyID.id)
+        }
+        return status
     }
 
     private func unregister() {

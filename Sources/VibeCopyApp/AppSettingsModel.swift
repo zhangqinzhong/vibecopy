@@ -239,16 +239,14 @@ final class AppSettingsModel: ObservableObject {
 
     func setSelectionHotKey(keyCode: UInt32, modifiers: UInt32) {
         NSLog("[VibeCopy] setSelectionHotKey called: keyCode=%u modifiers=%u", keyCode, modifiers)
-        selectionHotKey = HotKeyConfiguration(keyCode: keyCode, modifiers: modifiers)
+        let normalized = Self.normalizedHotKeyModifiers(modifiers)
+        selectionHotKey = HotKeyConfiguration(keyCode: keyCode, modifiers: normalized)
         NSLog("[VibeCopy] setSelectionHotKey after set: modifiers=%u", selectionHotKey.modifiers)
-        UserDefaults.standard.set(Int(keyCode), forKey: DefaultsKey.selectionHotKeyCode)
-        UserDefaults.standard.set(Int(modifiers), forKey: DefaultsKey.selectionHotKeyModifiers)
     }
 
     func setClipboardHotKey(keyCode: UInt32, modifiers: UInt32) {
-        clipboardHotKey = HotKeyConfiguration(keyCode: keyCode, modifiers: modifiers)
-        UserDefaults.standard.set(Int(keyCode), forKey: DefaultsKey.clipboardHotKeyCode)
-        UserDefaults.standard.set(Int(modifiers), forKey: DefaultsKey.clipboardHotKeyModifiers)
+        let normalized = Self.normalizedHotKeyModifiers(modifiers)
+        clipboardHotKey = HotKeyConfiguration(keyCode: keyCode, modifiers: normalized)
     }
 
     private static func normalizedHotKeyModifiers(_ modifiers: UInt32) -> UInt32 {

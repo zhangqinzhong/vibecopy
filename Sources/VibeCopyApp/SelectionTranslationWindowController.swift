@@ -646,6 +646,24 @@ final class SelectionTranslationWindowController: NSWindowController {
 private final class TranslationIslandPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        guard event.type == .keyDown,
+              event.modifierFlags.intersection(.deviceIndependentFlagsMask).contains(.command),
+              let chars = event.charactersIgnoringModifiers?.lowercased()
+        else { return super.performKeyEquivalent(with: event) }
+
+        let sel: Selector
+        switch chars {
+        case "c": sel = #selector(NSTextView.copy(_:))
+        case "v": sel = #selector(NSTextView.paste(_:))
+        case "x": sel = #selector(NSTextView.cut(_:))
+        case "a": sel = #selector(NSTextView.selectAll(_:))
+        default: return super.performKeyEquivalent(with: event)
+        }
+        NSApp.sendAction(sel, to: nil, from: self)
+        return true
+    }
 }
 
 private final class TranslationIslandHostingView<Content: View>: NSHostingView<Content> {

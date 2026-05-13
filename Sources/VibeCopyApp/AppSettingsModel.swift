@@ -219,27 +219,36 @@ final class AppSettingsModel: ObservableObject {
         let savedTargetLanguage = UserDefaults.standard.string(forKey: DefaultsKey.targetLanguage)
         targetLanguageCode = Self.normalizedInitialTargetLanguage(savedTargetLanguage)
         selectionHotKeyEnabled = UserDefaults.standard.object(forKey: DefaultsKey.selectionHotKeyEnabled) as? Bool ?? true
-        selectionHotKey = HotKeyConfiguration(
-            keyCode: UInt32(UserDefaults.standard.object(forKey: DefaultsKey.selectionHotKeyCode) as? Int ?? Int(HotKeyConfiguration.defaultSelection.keyCode)),
-            modifiers: Self.normalizedHotKeyModifiers(
-                UInt32(UserDefaults.standard.object(forKey: DefaultsKey.selectionHotKeyModifiers) as? Int ?? Int(HotKeyConfiguration.defaultSelection.modifiers))
-            )
-        )
+        let selKeyCode = UInt32(UserDefaults.standard.object(forKey: DefaultsKey.selectionHotKeyCode) as? Int ?? Int(HotKeyConfiguration.defaultSelection.keyCode))
+        let selModifiers = UInt32(UserDefaults.standard.object(forKey: DefaultsKey.selectionHotKeyModifiers) as? Int ?? Int(HotKeyConfiguration.defaultSelection.modifiers))
+        let selNormalized = Self.normalizedHotKeyModifiers(selModifiers)
+        NSLog("[VibeCopy] selectionHotKey init: rawModifiers=%u normalized=%u keyCode=%u", selModifiers, selNormalized, selKeyCode)
+        let selHotKey = HotKeyConfiguration(keyCode: selKeyCode, modifiers: selNormalized)
+        NSLog("[VibeCopy] selectionHotKey created: modifiers=%u", selHotKey.modifiers)
+        selectionHotKey = selHotKey
+
         clipboardHotKeyEnabled = UserDefaults.standard.object(forKey: DefaultsKey.clipboardHotKeyEnabled) as? Bool ?? true
-        clipboardHotKey = HotKeyConfiguration(
-            keyCode: UInt32(UserDefaults.standard.object(forKey: DefaultsKey.clipboardHotKeyCode) as? Int ?? Int(HotKeyConfiguration.defaultClipboard.keyCode)),
-            modifiers: Self.normalizedHotKeyModifiers(
-                UInt32(UserDefaults.standard.object(forKey: DefaultsKey.clipboardHotKeyModifiers) as? Int ?? Int(HotKeyConfiguration.defaultClipboard.modifiers))
-            )
-        )
+        let clipKeyCode = UInt32(UserDefaults.standard.object(forKey: DefaultsKey.clipboardHotKeyCode) as? Int ?? Int(HotKeyConfiguration.defaultClipboard.keyCode))
+        let clipModifiers = UInt32(UserDefaults.standard.object(forKey: DefaultsKey.clipboardHotKeyModifiers) as? Int ?? Int(HotKeyConfiguration.defaultClipboard.modifiers))
+        let clipNormalized = Self.normalizedHotKeyModifiers(clipModifiers)
+        NSLog("[VibeCopy] clipboardHotKey init: rawModifiers=%u normalized=%u keyCode=%u", clipModifiers, clipNormalized, clipKeyCode)
+        let clipHotKey = HotKeyConfiguration(keyCode: clipKeyCode, modifiers: clipNormalized)
+        NSLog("[VibeCopy] clipboardHotKey created: modifiers=%u", clipHotKey.modifiers)
+        clipboardHotKey = clipHotKey
     }
 
     func setSelectionHotKey(keyCode: UInt32, modifiers: UInt32) {
+        NSLog("[VibeCopy] setSelectionHotKey called: keyCode=%u modifiers=%u", keyCode, modifiers)
         selectionHotKey = HotKeyConfiguration(keyCode: keyCode, modifiers: modifiers)
+        NSLog("[VibeCopy] setSelectionHotKey after set: modifiers=%u", selectionHotKey.modifiers)
+        UserDefaults.standard.set(Int(keyCode), forKey: DefaultsKey.selectionHotKeyCode)
+        UserDefaults.standard.set(Int(modifiers), forKey: DefaultsKey.selectionHotKeyModifiers)
     }
 
     func setClipboardHotKey(keyCode: UInt32, modifiers: UInt32) {
         clipboardHotKey = HotKeyConfiguration(keyCode: keyCode, modifiers: modifiers)
+        UserDefaults.standard.set(Int(keyCode), forKey: DefaultsKey.clipboardHotKeyCode)
+        UserDefaults.standard.set(Int(modifiers), forKey: DefaultsKey.clipboardHotKeyModifiers)
     }
 
     private static func normalizedHotKeyModifiers(_ modifiers: UInt32) -> UInt32 {
@@ -252,6 +261,7 @@ final class AppSettingsModel: ObservableObject {
             if modifiers & UInt32(optionKey) != 0 { normalized |= HotKeyModifier.option }
             if modifiers & UInt32(controlKey) != 0 { normalized |= HotKeyModifier.control }
             if modifiers & UInt32(shiftKey) != 0 { normalized |= HotKeyModifier.shift }
+            NSLog("[VibeCopy] normalizedHotKeyModifiers: carbon branch, input=%u output=%u commandBit=%u optionBit=%u", modifiers, normalized, HotKeyModifier.command, HotKeyModifier.option)
             return normalized
         }
 
@@ -274,6 +284,7 @@ final class AppSettingsModel: ObservableObject {
         var normalized = modifiers
         let known = HotKeyModifier.command | HotKeyModifier.option | HotKeyModifier.control | HotKeyModifier.shift
         normalized &= known
+        NSLog("[VibeCopy] normalizedHotKeyModifiers: fallback branch, input=%u output=%u known=0x%x", modifiers, normalized, known)
         return normalized
     }
 

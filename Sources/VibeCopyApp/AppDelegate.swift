@@ -94,8 +94,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.settingsModel.updateSelectionHotKeyStatus(status)
             }
         hotKeyConfigurationCancellable = settingsModel.$selectionHotKey
-            .sink { [weak self] _ in
-                self?.updateSelectionHotKey()
+            .sink { [weak self] newConfig in
+                self?.updateSelectionHotKey(with: newConfig)
             }
 
         updateClipboardHotKey()
@@ -106,18 +106,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.settingsModel.updateClipboardHotKeyStatus(status)
             }
         clipboardHotKeyConfigurationCancellable = settingsModel.$clipboardHotKey
-            .sink { [weak self] _ in
-                self?.updateClipboardHotKey()
+            .sink { [weak self] newConfig in
+                self?.updateClipboardHotKey(with: newConfig)
             }
     }
 
-    private func updateSelectionHotKey() {
-        let status = selectionHotKeyManager.setEnabled(settingsModel.selectionHotKeyEnabled, configuration: settingsModel.selectionHotKey)
+    private func updateSelectionHotKey(with config: HotKeyConfiguration? = nil) {
+        let cfg = config ?? settingsModel.selectionHotKey
+        let status = selectionHotKeyManager.setEnabled(settingsModel.selectionHotKeyEnabled, configuration: cfg)
         settingsModel.updateSelectionHotKeyStatus(status)
     }
 
-    private func updateClipboardHotKey() {
-        let status = clipboardHotKeyManager.setEnabled(settingsModel.clipboardHotKeyEnabled, configuration: settingsModel.clipboardHotKey)
+    private func updateClipboardHotKey(with config: HotKeyConfiguration? = nil) {
+        let cfg = config ?? settingsModel.clipboardHotKey
+        let status = clipboardHotKeyManager.setEnabled(settingsModel.clipboardHotKeyEnabled, configuration: cfg)
         settingsModel.updateClipboardHotKeyStatus(status)
     }
 

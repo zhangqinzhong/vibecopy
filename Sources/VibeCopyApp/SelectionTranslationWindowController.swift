@@ -26,6 +26,7 @@ final class SelectionTranslationWindowController: NSWindowController {
     private var localEventMonitor: Any?
     private var globalMouseMonitor: Any?
     private var hoverOpenWorkItem: DispatchWorkItem?
+    private var hoverClipboardWorkItem: DispatchWorkItem?
     private var transitionGeneration = 0
     private var scheduledTranslation: DispatchWorkItem?
     private var themeCancellable: AnyCancellable?
@@ -149,6 +150,8 @@ final class SelectionTranslationWindowController: NSWindowController {
         let generation = transitionGeneration
         hoverOpenWorkItem?.cancel()
         hoverOpenWorkItem = nil
+        hoverClipboardWorkItem?.cancel()
+        hoverClipboardWorkItem = nil
         islandModel.closedSize = Self.closedIslandSize(for: Self.targetScreen())
         window.ignoresMouseEvents = true
         islandModel.phase = .closed
@@ -436,8 +439,11 @@ final class SelectionTranslationWindowController: NSWindowController {
                 guard let self else { return event }
 
                 if event.type == .keyDown && event.keyCode == 53 {
-                    self.dismissIsland()
-                    return nil
+                    if self.islandModel.phase == .opened {
+                        self.dismissIsland()
+                        return nil
+                    }
+                    return event
                 }
 
                 if event.type == .mouseMoved {
@@ -463,6 +469,8 @@ final class SelectionTranslationWindowController: NSWindowController {
     private func stopInteractionMonitoring() {
         hoverOpenWorkItem?.cancel()
         hoverOpenWorkItem = nil
+        hoverClipboardWorkItem?.cancel()
+        hoverClipboardWorkItem = nil
 
         if let localEventMonitor {
             NSEvent.removeMonitor(localEventMonitor)
@@ -478,15 +486,25 @@ final class SelectionTranslationWindowController: NSWindowController {
     private func handleMouseMoved(at screenPoint: NSPoint) {
         guard window?.isVisible == true else { return }
 
-        if islandModel.phase == .closed, closedIslandSide(at: screenPoint) == .translation {
-            scheduleHoverOpen()
-            return
-        }
-
         if islandModel.phase == .closed {
-            hoverOpenWorkItem?.cancel()
-            hoverOpenWorkItem = nil
-            return
+            switch closedIslandSide(at: screenPoint) {
+            case .translation:
+                scheduleHoverOpen()
+                hoverClipboardWorkItem?.cancel()
+                hoverClipboardWorkItem = nil
+                return
+            case .clipboard:
+                scheduleHoverClipboard()
+                hoverOpenWorkItem?.cancel()
+                hoverOpenWorkItem = nil
+                return
+            case nil:
+                hoverOpenWorkItem?.cancel()
+                hoverOpenWorkItem = nil
+                hoverClipboardWorkItem?.cancel()
+                hoverClipboardWorkItem = nil
+                return
+            }
         }
 
         if islandModel.phase == .opened, openedIslandRect().contains(screenPoint) {
@@ -506,6 +524,8 @@ final class SelectionTranslationWindowController: NSWindowController {
             if let side = closedIslandSide(at: screenPoint) {
                 hoverOpenWorkItem?.cancel()
                 hoverOpenWorkItem = nil
+                hoverClipboardWorkItem?.cancel()
+                hoverClipboardWorkItem = nil
                 switch side {
                 case .translation:
                     presentIsland()
@@ -531,6 +551,19 @@ final class SelectionTranslationWindowController: NSWindowController {
         }
 
         hoverOpenWorkItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.hoverOpenDelay, execute: item)
+    }
+
+    private func scheduleHoverClipboard() {
+        guard hoverClipboardWorkItem == nil else { return }
+
+        let item = DispatchWorkItem { [weak self] in
+            guard let self, self.islandModel.phase == .closed else { return }
+            self.hoverClipboardWorkItem = nil
+            self.showClipboardAction()
+        }
+
+        hoverClipboardWorkItem = item
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.hoverOpenDelay, execute: item)
     }
 

@@ -6,6 +6,7 @@ import Carbon
 final class SelectionTranslator {
     private let translationService: TranslationService
     private let settings: AppSettingsModel
+    private let clipboardMonitor: ClipboardMonitor
     private let showSettings: () -> Void
     private let showClipboard: () -> Void
     private let reader = SelectedTextReader()
@@ -15,11 +16,13 @@ final class SelectionTranslator {
     init(
         translationService: TranslationService,
         settings: AppSettingsModel,
+        clipboardMonitor: ClipboardMonitor,
         showSettings: @escaping () -> Void,
         showClipboard: @escaping () -> Void
     ) {
         self.translationService = translationService
         self.settings = settings
+        self.clipboardMonitor = clipboardMonitor
         self.showSettings = showSettings
         self.showClipboard = showClipboard
     }
@@ -78,6 +81,7 @@ final class SelectionTranslator {
         let controller = SelectionTranslationWindowController(
             translationService: translationService,
             settings: settings,
+            clipboardMonitor: clipboardMonitor,
             showSettings: showSettings,
             showClipboard: showClipboard
         )

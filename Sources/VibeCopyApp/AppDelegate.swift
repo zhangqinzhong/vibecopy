@@ -10,6 +10,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private lazy var selectionTranslator = SelectionTranslator(
         translationService: translationService,
         settings: settingsModel,
+        clipboardMonitor: clipboardMonitor,
         showSettings: { [weak self] in self?.showSettings() },
         showClipboard: { [weak self] in self?.showClipboardHistory() }
     )
@@ -129,6 +130,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             previewWindowController = SelectionTranslationWindowController(
                 translationService: translationService,
                 settings: settingsModel,
+                clipboardMonitor: clipboardMonitor,
                 showSettings: { [weak self] in self?.showSettings() },
                 showClipboard: { [weak self] in self?.showClipboardHistory() }
             )

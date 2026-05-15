@@ -11,6 +11,7 @@ final class SelectionTranslationWindowController: NSWindowController {
 
     private let translationService: TranslationService
     private let settings: AppSettingsModel
+    private let clipboardMonitor: ClipboardMonitor
     private let showSettingsAction: () -> Void
     private let showClipboardAction: () -> Void
     private let islandModel = TranslationIslandModel()
@@ -40,11 +41,13 @@ final class SelectionTranslationWindowController: NSWindowController {
     init(
         translationService: TranslationService,
         settings: AppSettingsModel,
+        clipboardMonitor: ClipboardMonitor,
         showSettings: @escaping () -> Void,
         showClipboard: @escaping () -> Void
     ) {
         self.translationService = translationService
         self.settings = settings
+        self.clipboardMonitor = clipboardMonitor
         self.showSettingsAction = showSettings
         self.showClipboardAction = showClipboard
         self.currentSourceLanguage = settings.sourceLanguageCode
@@ -191,7 +194,10 @@ final class SelectionTranslationWindowController: NSWindowController {
             showSettings: { [weak self] in self?.showSettingsAction() },
             selectSourceLanguage: { [weak self] option in self?.selectSourceLanguage(option) },
             selectTargetLanguage: { [weak self] option in self?.selectTargetLanguage(option) },
-            dismiss: { [weak self] in self?.dismissIsland() }
+            dismiss: { [weak self] in self?.dismissIsland() },
+            copyClipboardEntry: { [weak self] entry in self?.copyClipboardEntry(entry) },
+            deleteClipboardEntry: { [weak self] entry in self?.deleteClipboardEntry(entry) },
+            clipboardSearchChanged: { [weak self] text in self?.islandModel.clipboardSearchText = text }
         )
 
         let hostingView = TranslationIslandHostingView(
@@ -346,6 +352,31 @@ final class SelectionTranslationWindowController: NSWindowController {
         window?.level = isPinned ? .screenSaver : .statusBar
     }
 
+    private func copyClipboardEntry(_ entry: ClipboardEntry) {
+        clipboardMonitor.copy(entry)
+    }
+
+    private func deleteClipboardEntry(_ entry: ClipboardEntry) {
+        clipboardMonitor.remove(entry)
+        islandModel.clipboardEntries = clipboardMonitor.entries
+    }
+
+    private func deleteClipboardEntryWithReplacement(_ entry: ClipboardEntry) {
+        let entries = islandModel.filteredClipboardEntries()
+        var nextID: ClipboardEntry.ID?
+        if let index = entries.firstIndex(where: { $0.id == entry.id }) {
+            let nextIndex = entries.index(after: index)
+            if nextIndex < entries.endIndex {
+                nextID = entries[nextIndex].id
+            } else if index > entries.startIndex {
+                nextID = entries[entries.index(before: index)].id
+            }
+        }
+        clipboardMonitor.remove(entry)
+        islandModel.clipboardEntries = clipboardMonitor.entries
+        islandModel.clipboardSelectedID = nextID
+    }
+
     private func copy(_ text: String) {
         guard !text.isEmpty else { return }
         NSPasteboard.general.clearContents()
@@ -446,6 +477,27 @@ final class SelectionTranslationWindowController: NSWindowController {
                     return event
                 }
 
+                if event.type == .keyDown,
+                   self.islandModel.phase == .opened,
+                   self.islandModel.activePanel == .clipboard {
+                    switch event.keyCode {
+                    case 125:
+                        self.islandModel.navigateClipboardSelection(direction: 1)
+                        return nil
+                    case 126:
+                        self.islandModel.navigateClipboardSelection(direction: -1)
+                        return nil
+                    case 51, 117:
+                        if let id = self.islandModel.clipboardSelectedID,
+                           let entry = self.islandModel.clipboardEntries.first(where: { $0.id == id }) {
+                            self.deleteClipboardEntryWithReplacement(entry)
+                        }
+                        return nil
+                    default:
+                        break
+                    }
+                }
+
                 if event.type == .mouseMoved {
                     self.handleMouseMoved(at: NSEvent.mouseLocation)
                 }
@@ -530,7 +582,7 @@ final class SelectionTranslationWindowController: NSWindowController {
                 case .translation:
                     presentIsland()
                 case .clipboard:
-                    showClipboardAction()
+                    presentClipboardIsland()
                 }
             }
             return
@@ -560,11 +612,20 @@ final class SelectionTranslationWindowController: NSWindowController {
         let item = DispatchWorkItem { [weak self] in
             guard let self, self.islandModel.phase == .closed else { return }
             self.hoverClipboardWorkItem = nil
-            self.showClipboardAction()
+            self.presentClipboardIsland()
         }
 
         hoverClipboardWorkItem = item
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.hoverOpenDelay, execute: item)
+    }
+
+    private func presentClipboardIsland() {
+        islandModel.activePanel = .clipboard
+        islandModel.clipboardEntries = clipboardMonitor.entries
+        islandModel.clipboardSearchText = ""
+        islandModel.clipboardSelectedID = nil
+        islandModel.mode = .empty
+        presentIsland()
     }
 
     private func closedIslandRect() -> NSRect {
@@ -735,6 +796,11 @@ private extension EnvironmentValues {
     }
 }
 
+private enum IslandPanel {
+    case translation
+    case clipboard
+}
+
 private final class TranslationIslandModel: ObservableObject {
     @Published var phase: TranslationIslandPhase = .closed
     @Published var mode: TranslationMode = .empty
@@ -745,6 +811,35 @@ private final class TranslationIslandModel: ObservableObject {
     @Published var isPinned = false
     @Published var closedSize = CGSize(width: 246, height: 28)
     @Published var themePreference: AppThemePreference = .system
+    @Published var activePanel: IslandPanel = .translation
+    @Published var clipboardSearchText = ""
+    @Published var clipboardEntries: [ClipboardEntry] = []
+    @Published var clipboardSelectedID: ClipboardEntry.ID?
+
+    func filteredClipboardEntries() -> [ClipboardEntry] {
+        let query = clipboardSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return clipboardEntries }
+        return clipboardEntries.filter { $0.previewText.localizedCaseInsensitiveContains(query) }
+    }
+
+    func navigateClipboardSelection(direction: Int) {
+        let entries = filteredClipboardEntries()
+        guard !entries.isEmpty else { return }
+
+        if let currentID = clipboardSelectedID,
+           let currentIndex = entries.firstIndex(where: { $0.id == currentID }) {
+            let nextIndex = currentIndex + direction
+            if nextIndex >= 0, nextIndex < entries.count {
+                clipboardSelectedID = entries[nextIndex].id
+            } else if direction < 0 {
+                clipboardSelectedID = entries.last?.id
+            } else {
+                clipboardSelectedID = entries.first?.id
+            }
+        } else {
+            clipboardSelectedID = direction > 0 ? entries.first?.id : entries.last?.id
+        }
+    }
 }
 
 private struct TranslationIslandActions {
@@ -762,6 +857,9 @@ private struct TranslationIslandActions {
     var selectSourceLanguage: (TranslationLanguageOption) -> Void
     var selectTargetLanguage: (TranslationLanguageOption) -> Void
     var dismiss: () -> Void
+    var copyClipboardEntry: (ClipboardEntry) -> Void
+    var deleteClipboardEntry: (ClipboardEntry) -> Void
+    var clipboardSearchChanged: (String) -> Void
 }
 
 private struct PaneActionItem {
@@ -819,17 +917,33 @@ private struct TranslationIslandView: View {
                     .allowsHitTesting(false)
                 }
 
-                TranslationIslandContent(model: model, settings: settings, actions: actions)
-                    .frame(
-                        width: openedSize.width - openedContentHorizontalInset * 2,
-                        height: openedSize.height
-                    )
-                    .opacity(showsOpenedContent ? 1 : 0)
-                    .blur(radius: showsOpenedContent ? 0 : 5)
-                    .scaleEffect(showsOpenedContent ? 1 : 0.985, anchor: .top)
-                    .offset(y: showsOpenedContent ? 0 : -8)
-                    .allowsHitTesting(showsOpenedContent)
-                    .animation(.easeOut(duration: 0.16).delay(0.08), value: showsOpenedContent)
+                if showsOpenedContent, model.activePanel == .translation {
+                    TranslationIslandContent(model: model, settings: settings, actions: actions)
+                        .frame(
+                            width: openedSize.width - openedContentHorizontalInset * 2,
+                            height: openedSize.height
+                        )
+                        .opacity(showsOpenedContent ? 1 : 0)
+                        .blur(radius: showsOpenedContent ? 0 : 5)
+                        .scaleEffect(showsOpenedContent ? 1 : 0.985, anchor: .top)
+                        .offset(y: showsOpenedContent ? 0 : -8)
+                        .allowsHitTesting(showsOpenedContent)
+                        .animation(.easeOut(duration: 0.16).delay(0.08), value: showsOpenedContent)
+                }
+
+                if showsOpenedContent, model.activePanel == .clipboard {
+                    ClipboardIslandContent(model: model, settings: settings, actions: actions)
+                        .frame(
+                            width: openedSize.width - openedContentHorizontalInset * 2,
+                            height: openedSize.height
+                        )
+                        .opacity(showsOpenedContent ? 1 : 0)
+                        .blur(radius: showsOpenedContent ? 0 : 5)
+                        .scaleEffect(showsOpenedContent ? 1 : 0.985, anchor: .top)
+                        .offset(y: showsOpenedContent ? 0 : -8)
+                        .allowsHitTesting(showsOpenedContent)
+                        .animation(.easeOut(duration: 0.16).delay(0.08), value: showsOpenedContent)
+                }
             }
             .frame(
                 width: currentSurfaceSize.width,
@@ -1141,6 +1255,330 @@ private struct TranslationPane: View {
 
     private var showsSubmitButton: Bool {
         isSource && !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+}
+
+private struct ClipboardIslandContent: View {
+    @ObservedObject var model: TranslationIslandModel
+    @ObservedObject var settings: AppSettingsModel
+    let actions: TranslationIslandActions
+    @Environment(\.translationPalette) private var palette
+
+    @State private var selectedFilter: ClipboardFilter = .all
+
+    private var filteredEntries: [ClipboardEntry] {
+        let base: [ClipboardEntry] = switch selectedFilter {
+        case .all: model.clipboardEntries
+        case .today: model.clipboardEntries.filter { Calendar.current.isDateInToday($0.createdAt) }
+        case .text: model.clipboardEntries.filter { $0.kind == .text }
+        case .image: model.clipboardEntries.filter { $0.kind == .image }
+        case .link: model.clipboardEntries.filter { $0.kind == .link }
+        case .file: model.clipboardEntries.filter { $0.kind == .file }
+        }
+        let query = model.clipboardSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return base }
+        return base.filter { $0.previewText.localizedCaseInsensitiveContains(query) }
+    }
+
+    var body: some View {
+        ZStack(alignment: .top) {
+            VStack(spacing: 0) {
+                Color.clear.frame(height: 34)
+
+                HStack(spacing: 16) {
+                    Image(systemName: "doc.on.clipboard")
+                        .font(.system(size: 20, weight: .regular))
+                        .foregroundStyle(palette.muted)
+                        .frame(width: 28)
+
+                    HStack(spacing: 8) {
+                        Image(systemName: "magnifyingglass")
+                            .font(.system(size: 15, weight: .regular))
+                            .foregroundStyle(palette.muted)
+                        TextField("搜索剪贴板...", text: $model.clipboardSearchText)
+                            .textFieldStyle(.plain)
+                            .font(.system(size: 15, weight: .regular))
+                            .foregroundStyle(palette.ink)
+                    }
+                    .padding(.horizontal, 12)
+                    .frame(height: 34)
+                    .background(.thinMaterial, in: Capsule())
+                    .overlay {
+                        Capsule().stroke(palette.muted.opacity(0.15), lineWidth: 1)
+                    }
+                }
+                .padding(.horizontal, 24)
+                .padding(.top, 12)
+                .padding(.bottom, 8)
+
+                filterBar
+                Divider().overlay(palette.muted.opacity(0.12))
+                content
+                footer
+            }
+
+            toolbar
+                .frame(height: 28)
+                .scaleEffect(0.9)
+                .offset(y: -22)
+        }
+        .padding(.horizontal, 24)
+    }
+
+    private var toolbar: some View {
+        HStack(spacing: 18) {
+            TranslationActionButton(systemName: "pin", isActive: model.isPinned, palette: palette, action: actions.togglePin)
+                .offset(x: -28)
+            Spacer()
+            HStack(spacing: 18) {
+                TranslationActionButton(systemName: "gearshape", palette: palette, action: actions.showSettings)
+            }
+            .offset(x: 28)
+        }
+    }
+
+    private var filterBar: some View {
+        HStack(spacing: 8) {
+            ForEach([ClipboardFilter.today, .text, .image, .link]) { filter in
+                Button {
+                    selectedFilter = filter
+                } label: {
+                    Text(filter.title)
+                        .font(.system(size: 14, weight: .regular))
+                        .foregroundStyle(selectedFilter == filter ? palette.cyan : palette.muted)
+                        .padding(.horizontal, 12)
+                        .frame(height: 28)
+                        .background {
+                            if selectedFilter == filter {
+                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                    .fill(palette.cyan.opacity(0.14))
+                                    .overlay {
+                                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                            .stroke(palette.cyan.opacity(0.3), lineWidth: 1)
+                                    }
+                            }
+                        }
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 28)
+        .padding(.bottom, 8)
+    }
+
+    private var content: some View {
+        ScrollView(showsIndicators: false) {
+            LazyVStack(spacing: 10) {
+                ForEach(filteredEntries, id: \.id) { entry in
+                    ClipboardIslandEntryRow(
+                        entry: entry,
+                        isSelected: model.clipboardSelectedID == entry.id,
+                        palette: palette,
+                        selectAction: { model.clipboardSelectedID = entry.id },
+                        copyAction: { copyEntry(entry) },
+                        deleteAction: { deleteEntry(entry) }
+                    )
+                    .transition(.asymmetric(
+                        insertion: .opacity,
+                        removal: .scale(scale: 0.98).combined(with: .opacity)
+                    ))
+                }
+
+                if filteredEntries.isEmpty {
+                    VStack(spacing: 12) {
+                        Image(systemName: "clipboard")
+                            .font(.system(size: 36)).foregroundStyle(palette.muted)
+                        Text(model.clipboardSearchText.isEmpty ? "剪贴板为空" : "无匹配记录")
+                            .font(.system(size: 16)).foregroundStyle(palette.muted)
+                    }
+                    .frame(maxWidth: .infinity).padding(.top, 50)
+                }
+            }
+            .padding(.horizontal, 24)
+            .padding(.vertical, 12)
+            .animation(.easeOut(duration: 0.18), value: filteredEntries.map(\.id))
+        }
+    }
+
+    private var footer: some View {
+        HStack {
+            Text("\(filteredEntries.count) 条记录")
+                .font(.system(size: 12)).foregroundStyle(palette.muted)
+            Spacer()
+        }
+        .padding(.horizontal, 28).padding(.bottom, 10)
+    }
+
+    private func copyEntry(_ entry: ClipboardEntry) {
+        model.clipboardSelectedID = entry.id
+        actions.copyClipboardEntry(entry)
+    }
+
+    private func deleteEntry(_ entry: ClipboardEntry) {
+        let nextID = replacementSelection(afterDeleting: entry)
+        withAnimation(.easeOut(duration: 0.18)) {
+            model.clipboardSelectedID = nextID
+            actions.deleteClipboardEntry(entry)
+        }
+    }
+
+    private func replacementSelection(afterDeleting entry: ClipboardEntry) -> ClipboardEntry.ID? {
+        let entries = filteredEntries
+        guard let index = entries.firstIndex(where: { $0.id == entry.id }) else { return nil }
+        let nextIndex = entries.index(after: index)
+        if nextIndex < entries.endIndex { return entries[nextIndex].id }
+        if index > entries.startIndex { return entries[entries.index(before: index)].id }
+        return nil
+    }
+}
+
+private enum ClipboardFilter: String, CaseIterable, Identifiable {
+    case all, today, text, image, link, file
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .all: "全部"
+        case .today: "今天"
+        case .text: "文本"
+        case .image: "图像"
+        case .link: "链接"
+        case .file: "文件"
+        }
+    }
+}
+
+private struct ClipboardIslandEntryRow: View {
+    let entry: ClipboardEntry
+    let isSelected: Bool
+    let palette: TranslationPalette
+    let selectAction: () -> Void
+    let copyAction: () -> Void
+    let deleteAction: () -> Void
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 14) {
+            ZStack {
+                preview
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                ClipboardEntryClickSurface(
+                    singleClick: selectAction,
+                    doubleClick: copyAction,
+                    delete: deleteAction
+                )
+            }
+            .frame(maxWidth: .infinity)
+            .frame(minHeight: 58)
+
+            Text(timeString)
+                .font(.system(size: 13, weight: .regular))
+                .foregroundStyle(palette.muted)
+                .frame(width: 42, alignment: .trailing)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 11)
+        .frame(minHeight: 58)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(palette.buttonFill.opacity(0.55))
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(isSelected ? palette.cyan : .clear, lineWidth: 2)
+        }
+        .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .contextMenu {
+            Button("拷贝") { copyAction() }
+            Button("删除") { deleteAction() }
+        }
+    }
+
+    @ViewBuilder
+    private var preview: some View {
+        switch entry.kind {
+        case .image:
+            if let nsImage = entry.image {
+                Image(nsImage: nsImage)
+                    .resizable().scaledToFit()
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            } else {
+                Label("图片", systemImage: "photo").foregroundStyle(palette.muted)
+            }
+        case .file:
+            Label(entry.previewText, systemImage: "doc")
+                .font(.system(size: 13)).lineLimit(1).foregroundStyle(palette.ink)
+        case .link:
+            Label(entry.previewText, systemImage: "link")
+                .font(.system(size: 13)).lineLimit(1).foregroundStyle(Color.blue)
+        case .text:
+            Text(entry.previewText)
+                .font(.system(size: 14, weight: .regular))
+                .foregroundStyle(palette.ink).lineLimit(2)
+        }
+    }
+
+    private var timeString: String {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm"
+        return f.string(from: entry.createdAt)
+    }
+}
+
+// ClickSurface for clipboard island — mirrors ClickSurfaceView from ClipboardHistoryWindowController
+private struct ClipboardEntryClickSurface: NSViewRepresentable {
+    let singleClick: () -> Void
+    let doubleClick: () -> Void
+    let delete: () -> Void
+
+    func makeNSView(context: Context) -> ClipboardClickSurfaceView {
+        let view = ClipboardClickSurfaceView()
+        view.singleClick = singleClick
+        view.doubleClick = doubleClick
+        view.deleteAction = delete
+        return view
+    }
+
+    func updateNSView(_ nsView: ClipboardClickSurfaceView, context: Context) {
+        nsView.singleClick = singleClick
+        nsView.doubleClick = doubleClick
+        nsView.deleteAction = delete
+    }
+}
+
+private final class ClipboardClickSurfaceView: NSView {
+    var singleClick: (() -> Void)?
+    var doubleClick: (() -> Void)?
+    var deleteAction: (() -> Void)?
+
+    override var acceptsFirstResponder: Bool { true }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    override func mouseDown(with event: NSEvent) {
+        window?.makeFirstResponder(self)
+        if event.clickCount >= 2 {
+            doubleClick?()
+        } else {
+            singleClick?()
+        }
+    }
+
+    override func keyDown(with event: NSEvent) {
+        switch event.keyCode {
+        case 51, 117: deleteAction?()
+        default: super.keyDown(with: event)
+        }
+    }
+}
+
+private extension ClipboardEntry {
+    private static var islandImageCache: [UUID: NSImage] = [:]
+
+    var image: NSImage? {
+        if let cached = Self.islandImageCache[id] { return cached }
+        guard let imageData, let img = NSImage(data: imageData) else { return nil }
+        Self.islandImageCache[id] = img
+        return img
     }
 }
 

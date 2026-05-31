@@ -1,131 +1,131 @@
 # VibeCopy
 
-[English](/zhangqinzhong/vibecopy/blob/main/README_EN.md) | 中文
+[中文](/zhangqinzhong/vibecopy/blob/main/README_ZH.md) | English
 
 ---
 
-VibeCopy 是一个 macOS 菜单栏应用，将划词翻译、截图 OCR 翻译、剪贴板历史和灵动岛浮窗组合在一起，提供无缝的多语言工作体验。
+VibeCopy is a macOS menu bar app that combines text selection translation, screenshot OCR translation, clipboard history, and a Dynamic Island-style floating panel into a seamless multilingual workflow.
 
-当前版本是原生 Swift/AppKit + SwiftUI 实现，无 WebUI、WKWebView、Node 前端或第三方翻译应用依赖。
+Built with native Swift/AppKit + SwiftUI — no WebUI, WKWebView, Node frontend, or third-party translation app dependencies.
 
-## 功能
+## Features
 
-- **翻译岛** — Notch 顶部灵动岛风格浮窗，支持打开/收起动画、手动输入翻译、语言切换、语言交换、复制、朗读、标识符格式转换（驼峰/蛇形）。
-- **划词翻译** — 选中任意文本，按快捷键（默认 `⌥D`）即可翻译。通过 Accessibility API 读取选区，无侵入式体验。
-- **截图 OCR 翻译** — 区域选择截图后，使用 Vision OCR 识别文字，再交给 Apple Translation framework 翻译。
-- **剪贴板历史** — 自动记录文本、链接、图片和文件历史。支持搜索、分类筛选、一键回写粘贴、Esc 快速关闭，本地 JSON 持久化。
-- **全局快捷键** — 可在设置中开启/关闭并自定义划词翻译快捷键和剪贴板历史快捷键。冲突检测通过 Carbon API 实现，冲突时显示提示。
-- **设置中心** — 5 个标签页：通用、快捷键、外观、语言、关于。所有设置即时生效并持久化到 UserDefaults。
-- **主题** — 跟随系统、浅色、深色三种模式，设置窗口和翻译岛共享主题。
-- **语言包管理** — 基于 Apple Translation framework，查询系统支持语言及下载状态，可触发系统下载流程。
-- **朗读** — 使用 `AVSpeechSynthesizer` 朗读原文或译文。
+- **Translation Island** — A notch-aware floating panel with open/collapse animation, manual text input, language switching, swap direction, copy, text-to-speech, and identifier-case conversion (camelCase / snake_case).
+- **Selection Translation** — Select any text and press the hotkey (default `⌥D`) to translate. Reads selection via Accessibility API with a Cmd+C fallback — no intrusive popups.
+- **Screenshot OCR Translation** — Capture a screen region, recognize text with Vision OCR, then translate via Apple's Translation framework.
+- **Clipboard History** — Automatically records text, links, images, and files. Search, filter by type, one-click paste-back, Esc to close, local JSON persistence.
+- **Global Hotkeys** — Toggle and customize shortcuts for selection translation and clipboard history in Settings. Conflict detection via Carbon API with user-facing alerts.
+- **Settings Center** — 5 tabs: General, Shortcuts, Appearance, Language, About. All changes take effect immediately and persist to UserDefaults.
+- **Themes** — System, Light, and Dark modes. Settings window and Translation Island share the same theme.
+- **Language Pack Management** — Built on Apple's Translation framework. Query system-supported languages, check download status, and trigger system download flows.
+- **Text-to-Speech** — Reads source or translated text aloud using `AVSpeechSynthesizer`.
 
-## 本地运行
+## Quick Start
 
 ```bash
-# 一键开发运行（先关闭旧进程再构建启动）
+# One-command dev run (kills old process, builds, launches)
 scripts/run-dev.sh
 
-# 或直接 SwiftPM 构建运行
+# Or direct SwiftPM build and run
 swift run VibeCopy
 ```
 
-运行后应用出现在 macOS 菜单栏，显示为 `VC`。
+After launch, the app appears in the macOS menu bar as `VC`.
 
-## 构建与打包
+## Build & Package
 
 ```bash
-# 构建 .app
+# Build .app bundle
 scripts/build-app.sh release
 open dist/VibeCopy.app
 
-# 打包 .dmg
+# Package as .dmg
 scripts/create-dmg.sh
 # → dist/VibeCopy.dmg
 ```
 
 ## GitHub Release
 
-推送 `v*` tag 触发 GitHub Actions 自动构建 DMG 并发布：
+Push a `v*` tag to trigger GitHub Actions — automatically builds the DMG and publishes it:
 
 ```bash
 git tag v0.1.1 && git push origin v0.1.1
 ```
 
-## 架构概览
+## Architecture
 
 ```
-AppDelegate (组合根)
-├── StatusBarController         ← 菜单栏 VC 入口
-├── AppSettingsModel            ← @Published → UserDefaults 同步
-├── ClipboardMonitor            ← 每 0.7s 轮询 NSPasteboard，JSON 持久化
-├── TranslationService          ← 封装 Apple TranslationSession
-├── ScreenshotCoordinator       ← 截图 → OCR → 翻译 流程编排
-├── SelectionTranslator         ← Accessibility API / Cmd+C 回退 读取选区
-├── SelectionTranslationWindowController  ← 翻译岛浮窗 (~1700 行)
-├── ClipboardHistoryWindowController      ← SwiftUI 剪贴板历史面板
-├── SettingsWindowController    ← 5 标签页设置窗口
+AppDelegate (composition root)
+├── StatusBarController         ← menu bar VC entry + dropdown
+├── AppSettingsModel            ← @Published → UserDefaults sync
+├── ClipboardMonitor            ← polls NSPasteboard every 0.7s, JSON persistence
+├── TranslationService          ← wraps Apple TranslationSession
+├── ScreenshotCoordinator       ← screenshot → OCR → translate pipeline
+├── SelectionTranslator         ← Accessibility API / Cmd+C fallback
+├── SelectionTranslationWindowController  ← Translation Island (~1700 lines)
+├── ClipboardHistoryWindowController      ← SwiftUI clipboard history panel
+├── SettingsWindowController    ← 5-tab settings window
 └── GlobalHotKeyManager         ← Carbon RegisterEventHotKey
 ```
 
-## Translation 语言包
+## Translation Language Packs
 
-VibeCopy 使用 Apple Translation framework。系统语言包由 macOS 管理：
+VibeCopy uses Apple's Translation framework. System language packs are managed by macOS:
 
-- 可查询语言包是否已下载或可下载。
-- 可通过 `prepareTranslation()` 触发系统下载确认流程。
-- Apple 公共 API 不提供真实下载进度、速度或后台任务状态。
-- 应用不能绕过系统 UI 静默安装语言包。
+- The app can check whether a language pack is installed or available for download.
+- The app can trigger the system download dialog via `prepareTranslation()`.
+- Apple's public API does not expose real download progress, speed, or background task status.
+- The app cannot silently install language packs — system UI confirmation is required.
 
-## 当前限制
+## Known Limitations
 
-- 多显示器场景下截图区域选择体验待优化。
-- 剪贴板历史不支持富文本单独建模。
-- 首次启动缺少权限引导流程（屏幕录制、辅助功能、通知）。
+- Screenshot region selection on multi-monitor setups needs improvement.
+- Clipboard history does not model rich text separately.
+- No first-launch permission onboarding flow (Screen Recording, Accessibility, Notifications).
 
-## 演进路线
+## Roadmap
 
-### 已完成
+### Completed
 
-- [x] 划词翻译 + 翻译岛灵动岛浮窗
-- [x] 截图 OCR 翻译
-- [x] 剪贴板历史（搜索、筛选、回写、持久化）
-- [x] 全局快捷键 + 冲突检测
-- [x] 主题切换（系统 / 浅色 / 深色）
-- [x] 语言包管理
-- [x] 朗读 (TTS)
-- [x] GitHub Actions 自动构建发布
+- [x] Selection translation + Translation Island floating panel
+- [x] Screenshot OCR translation
+- [x] Clipboard history (search, filter, paste-back, persistence)
+- [x] Global hotkeys + conflict detection
+- [x] Theme switching (System / Light / Dark)
+- [x] Language pack management
+- [x] Text-to-speech
+- [x] GitHub Actions CI/CD for releases
 
-### 近期计划
+### Near Term
 
-- [ ] 剪贴板历史嵌入灵动岛右侧
-- [ ] 多显示器截图优化
-- [ ] 首次启动权限引导（屏幕录制、辅助功能）
-- [ ] 富文本剪贴板支持
-- [ ] 翻译结果收藏与历史记录
+- [ ] Clipboard history embedded in the Island (right-side panel)
+- [ ] Multi-monitor screenshot improvements
+- [ ] First-launch permission onboarding (Screen Recording, Accessibility)
+- [ ] Rich text clipboard support
+- [ ] Translation favorites & history
 
-### 中期路线
+### Mid Term
 
-- [ ] iCloud 同步剪贴板历史
-- [ ] 接入第三方翻译引擎（DeepL、Google Translate 等）
-- [ ] 截图标注与编辑工具
-- [ ] 划词翻译弹出气泡模式
-- [ ] 离线翻译模型支持
+- [ ] iCloud sync for clipboard history
+- [ ] Third-party translation engines (DeepL, Google Translate, etc.)
+- [ ] Screenshot annotation & editing tools
+- [ ] Popup bubble mode for selection translation
+- [ ] On-device ML translation models
 
-### 长期愿景
+### Long Term
 
-- [ ] 插件系统，支持社区扩展
-- [ ] AI 写作辅助（润色、摘要、续写）
-- [ ] iOS 配套应用
-- [ ] 团队剪贴板共享
+- [ ] Plugin system for community extensions
+- [ ] AI writing assistant (polish, summarize, continue)
+- [ ] iOS companion app
+- [ ] Team clipboard sharing
 
-## 工程备注
+## Technical Notes
 
-- SwiftPM target，链接 `AppKit`、`Carbon`、`Vision`、`SwiftUI`、`Translation`、`AVFoundation`、`ScreenCaptureKit`。
-- `Package.swift` 当前平台配置为 macOS 15.0。
-- `changelog/` 记录产品和实现演进。
-- 所有用户界面文本为简体中文。
+- SwiftPM target linking `AppKit`, `Carbon`, `Vision`, `SwiftUI`, `Translation`, `AVFoundation`, `ScreenCaptureKit`.
+- `Package.swift` platform set to macOS 15.0.
+- `changelog/` tracks product and implementation evolution.
+- All UI labels are in Simplified Chinese.
 
-## 许可
+## License
 
 MIT License
